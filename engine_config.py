@@ -162,14 +162,14 @@ ENGINE_CONFIG = {
     },
 
     # RPM bilgisi
-    "nominal_rpm_range":  (1800, 2700),   # Krank mili RPM — teyit bekleniyor
-    "max_rpm":            2800,
+    "nominal_rpm_range":  (1690, 3887),   # Krank mili RPM — teyit bekleniyor
+    "max_rpm":            3887,
     "rpm_source":         "COMPUTED_FROM_ORDER",
     "rpm_source_warning": (
         "RPM tachometer YOKTUR. Yanma orderindan (2x) geri hesaplama yapilmaktadir. "
         "Sabit devir noktalarinda olcum alinmasi ve RPM manuel girilmesi onerilir."
     ),
-    "recommended_rpm_points": [1800, 2000, 2300, 2500, 2700],
+    "recommended_rpm_points": [1690, 2000, 2300, 2500, 3887],
 }
 
 
