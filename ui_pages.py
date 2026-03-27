@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QFont
 
+from ui_worker import AnalysisWorker, FleetAnalysisWorker, DemoWorker
 from ui_widgets import (
     SectionTitle, Divider, StatusBadge, HealthScoreDial,
     EngineCard, FilePickerRow, FolderPickerRow,
@@ -227,7 +228,6 @@ class PageSingleAnalysis(QWidget):
         except ValueError:
             freq_max = 3000.0
 
-        from ui_worker import AnalysisWorker
         loc_code = self._sensor_combo.currentData() or self._sensor_combo.currentText().split()[0]
         self._worker = AnalysisWorker(
             ref_path       = self._ref_picker.path(),
@@ -378,7 +378,6 @@ class PageFleetAnalysis(QWidget):
             QMessageBox.warning(self, "Eksik giriş", "Filo klasörünü seçin.")
             return
 
-        from ui_worker import FleetAnalysisWorker
         loc_code2 = self._sensor_combo.currentData() or self._sensor_combo.currentText().split()[0]
         self._worker = FleetAnalysisWorker(
             ref_path       = self._ref_picker.path(),
@@ -492,7 +491,6 @@ class PageDemoRun(QWidget):
         super().resizeEvent(event)
 
     def _run_demo(self):
-        from ui_worker import DemoWorker
         self._worker = DemoWorker()
         self._worker.progress.connect(lambda m: self._log.append_log(m))
         self._worker.engine_done.connect(self._on_engine_done)
