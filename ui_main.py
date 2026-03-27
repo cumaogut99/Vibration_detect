@@ -24,6 +24,12 @@ from PySide6.QtCore import Qt, QThread, Signal, QObject, QSize
 from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QPixmap
 
 # ── Backend imports ────────────────────────────────────────────────────────
+# Backend modullerini onceden yukle — circular import'u onler
+import models          # noqa: F401 — ilk yuklenmeli
+import engine_config   # noqa: F401
+import importers       # noqa: F401
+import analysis        # noqa: F401
+
 from ui_widgets import (
     NavButton, SectionTitle, Divider, StatusBadge,
     EngineCard, LoadingOverlay, LogPanel,
