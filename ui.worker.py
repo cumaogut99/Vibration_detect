@@ -10,10 +10,11 @@ from typing import Dict, Optional
 
 from PySide6.QtCore import QThread, Signal
 
-# Backend importlari dosya basinda — circular import'u onler
+# Backend importlari — models en once yuklenmeli
+from models import DataType, EngineRun
+from engine_config import ORDER_DEFINITIONS
 from importers import ImporterFactory
 from analysis import build_default_analyzer, OrderExtractor
-from engine_config import ORDER_DEFINITIONS
 
 logger = logging.getLogger(__name__)
 
