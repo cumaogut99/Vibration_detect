@@ -286,6 +286,128 @@ class DewesoftWaterfallImporter(BaseImporter):
 
 
 # ---------------------------------------------------------------------------
+#  BASIT WATERFALL CSV (TEK BASLIK SATIRI)
+# ---------------------------------------------------------------------------
+
+class SimpleWaterfallImporter(BaseImporter):
+    """
+    DEWESoft metadata'si olmadan tek baslik satirli CSV.
+
+    Format:
+      Satir 1: "Speed (rpm)/Frequency (Hz)" | f0 | f1 | f2 | ...
+               (veya "Speed (rpm)/Order (-)")
+      Satir 2+: rpm | amp_0 | amp_1 | ...
+    """
+
+    def can_handle(self, path: Path) -> bool:
+        if path.suffix.lower() != ".csv":
+            return False
+        try:
+            with path.open(encoding="utf-8-sig", errors="replace") as f:
+                row1 = f.readline()
+            reader = csv.reader(io.StringIO(row1))
+            first_cells = next(reader, [])
+            if not first_cells:
+                return False
+            first_cell = first_cells[0].lower()
+            return (
+                any(k in first_cell for k in ("speed", "rpm", "devir")) and
+                any(k in first_cell for k in ("freq", "hz", "order"))
+            )
+        except Exception:
+            return False
+
+    def load(self, path: Path, engine_id: str, run_id: str,
+             sensor_location: str, axis: str = "X",
+             is_reference: bool = False,
+             metadata: Optional[Dict] = None) -> EngineRun:
+
+        logger.info("Basit Waterfall CSV yukleniyor: %s", path.name)
+        rows = list(csv.reader(
+            io.StringIO(path.read_text(encoding="utf-8-sig", errors="replace"))
+        ))
+
+        if len(rows) < 2:
+            raise ValueError(f"Yetersiz satir: {path.name}")
+
+        header_cell = rows[0][0].strip() if rows[0] else ""
+        is_order = "order" in header_cell.lower()
+
+        x_values: List[float] = []
+        for cell in rows[0][1:]:
+            c = cell.strip()
+            if not c:
+                continue
+            try:
+                x_values.append(float(c))
+            except ValueError:
+                logger.warning("Baslik parse hatasi: '%s'", c)
+
+        if not x_values:
+            raise ValueError(f"X ekseni sutunlari bulunamadi: {path.name}")
+
+        x_arr = np.array(x_values, dtype=np.float64)
+        n_cols = len(x_arr)
+
+        rpm_list: List[float] = []
+        amp_rows: List[List[float]] = []
+
+        for row in rows[1:]:
+            if not row or not row[0].strip():
+                continue
+            try:
+                rpm = float(row[0].strip())
+            except ValueError:
+                continue
+            amps = []
+            for cell in row[1: n_cols + 1]:
+                try:
+                    amps.append(float(cell.strip()) if cell.strip() else 0.0)
+                except ValueError:
+                    amps.append(0.0)
+            while len(amps) < n_cols:
+                amps.append(0.0)
+            rpm_list.append(rpm)
+            amp_rows.append(amps[:n_cols])
+
+        if not rpm_list:
+            raise ValueError(f"Veri satiri yok: {path.name}")
+
+        rpm_values = np.array(rpm_list, dtype=np.float64)
+        amplitudes = np.array(amp_rows, dtype=np.float64)
+
+        meta = dict(metadata or {})
+        meta.update({"channel_header": header_cell, "unit": "",
+                     "source_format": "simple_waterfall_csv", "axis": axis})
+
+        if is_order:
+            mean_shaft_hz = float(rpm_values.mean()) / 60.0
+            frequencies = x_arr * mean_shaft_hz
+            logger.info("  -> Order Tracking: %d RPM x %d order | RPM: %.0f-%.0f",
+                        len(rpm_list), n_cols, rpm_values.min(), rpm_values.max())
+            return EngineRun(
+                engine_id=engine_id, run_id=run_id,
+                sensor_location=sensor_location, axis=axis,
+                data_type=DataType.ORDER_TRACKING,
+                rpm_values=rpm_values, frequencies=frequencies,
+                amplitudes=amplitudes,
+                orders=x_arr, order_amplitudes=amplitudes,
+                is_reference=is_reference, metadata=meta,
+            )
+
+        logger.info("  -> FFT Waterfall: %d RPM x %d freq | RPM: %.0f-%.0f",
+                    len(rpm_list), n_cols, rpm_values.min(), rpm_values.max())
+        return EngineRun(
+            engine_id=engine_id, run_id=run_id,
+            sensor_location=sensor_location, axis=axis,
+            data_type=DataType.FFT_WATERFALL,
+            rpm_values=rpm_values, frequencies=x_arr,
+            amplitudes=amplitudes,
+            is_reference=is_reference, metadata=meta,
+        )
+
+
+# ---------------------------------------------------------------------------
 #  NPZ IMPORTER
 # ---------------------------------------------------------------------------
 
@@ -391,6 +513,7 @@ class ImporterFactory:
         self._importers: List[BaseImporter] = [
             DewesoftOrderTrackingImporter(),
             DewesoftWaterfallImporter(),
+            SimpleWaterfallImporter(),
             NPZImporter(),
             TXTImporter(),
         ]
