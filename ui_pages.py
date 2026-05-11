@@ -580,7 +580,7 @@ class PageResults(QWidget):
         plot_layout.addWidget(self._plot_tabs)
 
         self._canvas_waterfall = MatplotlibCanvas()
-        self._canvas_orders    = MatplotlibCanvas()
+        self._canvas_orders    = MatplotlibCanvas(scrollable=True)
         self._canvas_card      = MatplotlibCanvas()
 
         self._plot_tabs.addTab(self._canvas_waterfall, "🌊  Waterfall")

@@ -149,11 +149,10 @@ def plot_order_comparison(
     ref_order_data: Dict[float, OrderAmplitude],
     anomalies: List[AnomalyFlag],
     orders_to_plot: Optional[List[float]] = None,
-    cols: int = 3,
+    cols: int = 2,
 ) -> Figure:
     """Grid of subplots — one per order — showing measured vs reference."""
     if orders_to_plot is None:
-        # Show orders that have anomalies + mandatory
         flagged = {a.order for a in anomalies}
         from engine_config import MANDATORY_MONITOR_ORDERS
         orders_to_plot = sorted(set(MANDATORY_MONITOR_ORDERS) | flagged)
@@ -164,11 +163,17 @@ def plot_order_comparison(
 
     n = len(orders_to_plot)
     rows = (n + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 2.8))
+
+    # Per-subplot footprint chosen so titles + axes don't overlap and the
+    # canvas remains readable when embedded in a scroll area.
+    fig, axes = plt.subplots(
+        rows, cols,
+        figsize=(cols * 6.5, rows * 3.4),
+        constrained_layout=True,
+    )
     fig.patch.set_facecolor(THEME["bg"])
 
-    axes_flat = np.array(axes).flatten()
-
+    axes_flat = np.atleast_1d(axes).flatten()
     anomaly_orders = {a.order: a for a in anomalies}
 
     for idx, order in enumerate(orders_to_plot):
@@ -181,13 +186,13 @@ def plot_order_comparison(
         if has_ref:
             ref = ref_order_data[order]
             ax.plot(ref.rpm_values, ref.amplitudes,
-                    color=THEME["ref_color"], lw=1.2, alpha=0.7, label="Reference")
+                    color=THEME["ref_color"], lw=1.6, alpha=0.85, label="Referans")
 
-        color = THEME["anomaly_color"] if order in anomaly_orders else THEME["meas_color"]
+        is_anomaly = order in anomaly_orders
+        meas_color = THEME["anomaly_color"] if is_anomaly else THEME["meas_color"]
         ax.plot(meas.rpm_values, meas.amplitudes,
-                color=color, lw=1.5, label="Measured")
+                color=meas_color, lw=2.0, label="Ölçüm")
 
-        # Shade the region between
         if has_ref:
             from scipy.interpolate import interp1d
             ref_interp = interp1d(
@@ -199,35 +204,37 @@ def plot_order_comparison(
             above = meas.amplitudes > ref_at_meas
             ax.fill_between(
                 meas.rpm_values, ref_at_meas, meas.amplitudes,
-                where=above, alpha=0.15, color=THEME["anomaly_color"],
+                where=above, alpha=0.18, color=THEME["anomaly_color"],
             )
 
-        # Mark anomaly RPM
-        if order in anomaly_orders:
+        if is_anomaly:
             a = anomaly_orders[order]
-            ax.axvline(a.rpm, color=THEME["anomaly_color"], lw=0.8, linestyle=":", alpha=0.7)
+            ax.axvline(a.rpm, color=THEME["anomaly_color"], lw=1.0, linestyle=":", alpha=0.8)
             ax.text(
-                0.97, 0.95,
-                f"×{a.amplitude_ratio:.2f}",
+                0.97, 0.93,
+                f"×{a.amplitude_ratio:.2f}  @ {a.rpm:.0f} RPM",
                 transform=ax.transAxes,
                 ha="right", va="top",
-                color=THEME["anomaly_color"], fontsize=7, fontweight="bold",
+                color=THEME["anomaly_color"], fontsize=10, fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.3",
+                          facecolor=THEME["surface"], edgecolor=THEME["anomaly_color"],
+                          alpha=0.85),
             )
 
         odef = ORDER_DEFINITIONS.get(order)
-        short_name = odef.name if odef else f"Order {order}"
-        ax.set_title(f"{short_name}", fontsize=8, pad=4)
-        ax.set_xlabel("RPM", fontsize=7)
-        ax.set_ylabel("Amplitude", fontsize=7)
-        ax.legend(fontsize=6, framealpha=0.2, facecolor=THEME["surface"])
+        title = odef.name if odef else f"Order {order}"
+        ax.set_title(title, fontsize=12, pad=8, fontweight="bold",
+                     color=THEME["text"])
+        ax.set_xlabel("RPM", fontsize=10, color=THEME["text_muted"])
+        ax.set_ylabel("Genlik", fontsize=10, color=THEME["text_muted"])
+        ax.tick_params(labelsize=9)
+        ax.legend(fontsize=9, framealpha=0.3, facecolor=THEME["surface"], loc="upper left")
 
-    # Hide unused axes
     for idx in range(len(orders_to_plot), len(axes_flat)):
         axes_flat[idx].set_visible(False)
 
-    fig.suptitle("Order Amplitude Comparison: Measured vs Reference",
-                 color=THEME["text"], fontsize=10, y=1.01)
-    fig.tight_layout()
+    fig.suptitle("Order Genlik Karşılaştırması: Ölçüm vs Referans",
+                 color=THEME["text"], fontsize=14, fontweight="bold")
     return fig
 
 

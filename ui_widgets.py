@@ -10,7 +10,7 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QFrame, QLabel, QPushButton, QHBoxLayout,
     QVBoxLayout, QSizePolicy, QPlainTextEdit, QProgressBar,
-    QGraphicsOpacityEffect,
+    QGraphicsOpacityEffect, QScrollArea,
 )
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
@@ -367,45 +367,69 @@ class LogPanel(QPlainTextEdit):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MatplotlibCanvas(QWidget):
-    """Embed a matplotlib Figure inside a PySide6 widget."""
+    """
+    Embed a matplotlib Figure inside a PySide6 widget.
 
-    def __init__(self, parent=None):
+    scrollable=True wraps the canvas in a QScrollArea and gives the canvas its
+    natural pixel size (figsize × dpi). Use for charts where compressing to the
+    available area produces unreadable subplots (e.g. multi-subplot grids).
+    """
+
+    def __init__(self, parent=None, scrollable: bool = False):
         super().__init__(parent)
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-        from matplotlib.figure import Figure
 
         self._canvas: Optional[FigureCanvasQTAgg] = None
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._scrollable = scrollable
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        if scrollable:
+            self._scroll = QScrollArea()
+            self._scroll.setWidgetResizable(True)
+            self._scroll.setFrameShape(QFrame.NoFrame)
+            self._inner = QWidget()
+            self._content_layout = QVBoxLayout(self._inner)
+            self._content_layout.setContentsMargins(0, 0, 0, 0)
+            self._scroll.setWidget(self._inner)
+            outer.addWidget(self._scroll)
+        else:
+            self._content_layout = outer
 
         self._placeholder = QLabel("Henüz grafik yok.\nAnaliz çalıştırıldıktan sonra burada görüntülenecek.")
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder.setObjectName("fieldLabel")
-        self._layout.addWidget(self._placeholder)
+        self._content_layout.addWidget(self._placeholder)
 
     def set_figure(self, fig) -> None:
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
-        # Remove old canvas
         if self._canvas:
-            self._layout.removeWidget(self._canvas)
+            self._content_layout.removeWidget(self._canvas)
             self._canvas.deleteLater()
             self._canvas = None
 
         if self._placeholder:
-            self._layout.removeWidget(self._placeholder)
+            self._content_layout.removeWidget(self._placeholder)
             self._placeholder.hide()
 
         self._canvas = FigureCanvasQTAgg(fig)
-        self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._layout.addWidget(self._canvas)
+        if self._scrollable:
+            w_in, h_in = fig.get_size_inches()
+            dpi = fig.dpi
+            self._canvas.setMinimumSize(int(w_in * dpi), int(h_in * dpi))
+            self._canvas.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        else:
+            self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._content_layout.addWidget(self._canvas)
         self._canvas.draw()
 
     def clear(self) -> None:
         if self._canvas:
-            self._layout.removeWidget(self._canvas)
+            self._content_layout.removeWidget(self._canvas)
             self._canvas.deleteLater()
             self._canvas = None
         if self._placeholder:
             self._placeholder.show()
-            self._layout.addWidget(self._placeholder)
+            self._content_layout.addWidget(self._placeholder)
