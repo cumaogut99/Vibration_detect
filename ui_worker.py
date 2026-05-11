@@ -263,6 +263,65 @@ class DemoWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
+#  TEK MOTOR ANALİZİ — DB tabanlı
+# ---------------------------------------------------------------------------
+
+class DbAnalysisWorker(QThread):
+    """
+    DuckDB'den iki run id alir (referans + olcum), analiz pipeline'ini
+    calistirir, AnalysisWorker ile ayni sinyal yapilarini yayar.
+
+    Sinyaller:
+      progress(str)
+      finished(report, order_data, ref_order_data, run, ref_run)
+      error(str)
+    """
+
+    progress = Signal(str)
+    finished = Signal(object, object, object, object, object)
+    error    = Signal(str)
+
+    def __init__(
+        self,
+        ref_run_id: int,
+        meas_run_id: int,
+        db_path: Optional[Path] = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._ref_id  = int(ref_run_id)
+        self._meas_id = int(meas_run_id)
+        self._db_path = db_path
+
+    def run(self):
+        try:
+            self.progress.emit(f"DB'den runlar yukleniyor (ref={self._ref_id}, meas={self._meas_id})...")
+            with DataStore(db_path=self._db_path) as store:
+                ref_run  = store.get_run(self._ref_id)
+                meas_run = store.get_run(self._meas_id)
+
+            # Calistirilan run referans flag'i kullanmamakla birlikte tutarlilik icin set ediyoruz
+            ref_run.is_reference = True
+
+            self.progress.emit("Analiz calistiriliyor...")
+            analyzer = build_default_analyzer()
+            report   = analyzer.analyze(meas_run, ref_run)
+
+            self.progress.emit("Order amplitudleri hesaplaniyor...")
+            extractor      = OrderExtractor()
+            orders         = list(ORDER_DEFINITIONS.keys())
+            order_data     = extractor.extract(meas_run, orders)
+            ref_order_data = extractor.extract(ref_run,  orders)
+
+            self.progress.emit("Tamamlandi.")
+            self.finished.emit(report, order_data, ref_order_data, meas_run, ref_run)
+
+        except Exception as exc:
+            logger.error("DbAnalysisWorker hatasi: %s", exc)
+            self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")
+
+
+# ---------------------------------------------------------------------------
 #  DATA INGEST  (CSV -> DuckDB)
 # ---------------------------------------------------------------------------
 

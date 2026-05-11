@@ -26,6 +26,7 @@ from PySide6.QtGui import QColor, QFont
 
 from ui_worker import (
     AnalysisWorker, FleetAnalysisWorker, DemoWorker, DataIngestWorker,
+    DbAnalysisWorker,
 )
 from ui_widgets import (
     SectionTitle, Divider, StatusBadge, HealthScoreDial,
@@ -398,6 +399,341 @@ class PageDataIngest(QWidget):
         from PySide6.QtCore import QStringListModel
         engines = self._store.list_engines()
         self._engine_completer.setModel(QStringListModel(engines, self._engine_completer))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE: DB-BASED SINGLE ANALYSIS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PageDbSingleAnalysis(QWidget):
+    """
+    DuckDB tabanlı tek-motor analizi: motor + kanal seçilir, kanaldaki
+    tüm run'lar listelenir, biri referans, biri ölçüm olarak işaretlenir.
+
+    ``runs_changed`` slot'una bağlanırsa Veri Yükle sayfasında yeni
+    bir run eklendiğinde liste otomatik tazelenir.
+    """
+
+    analysis_done = Signal(object, object, object, object, object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("pageContent")
+        self._worker: Optional[DbAnalysisWorker] = None
+        self._store: Optional[DataStore] = None
+
+        # Seçili id'ler
+        self._sel_ref_id: Optional[int] = None
+        self._sel_meas_id: Optional[int] = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(20)
+
+        outer.addWidget(_page_header(
+            "🔍  Tek Motor Analizi",
+            "Veritabanından bir motor + kanal seçin, ardından referans ve "
+            "ölçüm run'larını işaretleyip analizi başlatın.",
+        ))
+        outer.addWidget(Divider())
+
+        # ── Üst seçim çubuğu ─────────────────────────────────────────────
+        sel_row = QHBoxLayout()
+        sel_row.setSpacing(10)
+
+        self._engine_combo = QComboBox()
+        self._engine_combo.setMinimumWidth(180)
+        self._engine_combo.currentTextChanged.connect(self._on_engine_changed)
+        sel_row.addWidget(self._lbl("Motor:"))
+        sel_row.addWidget(self._engine_combo)
+
+        self._channel_combo = QComboBox()
+        self._channel_combo.setMinimumWidth(220)
+        self._channel_combo.currentIndexChanged.connect(self._on_channel_changed)
+        sel_row.addWidget(self._lbl("Kanal:"))
+        sel_row.addWidget(self._channel_combo)
+
+        refresh_btn = QPushButton("⟳")
+        refresh_btn.setObjectName("btnBrowse")
+        refresh_btn.setFixedWidth(36)
+        refresh_btn.setToolTip("Listeyi tazele")
+        refresh_btn.clicked.connect(self._refresh_all)
+        sel_row.addWidget(refresh_btn)
+
+        sel_row.addStretch()
+        outer.addLayout(sel_row)
+
+        # ── Run tablosu + aksiyon butonları ─────────────────────────────
+        runs_card, runs_body = _card("📋  Bu Kanaldaki Run'lar")
+        self._runs_table = _make_table(
+            ["ID", "Run", "Tarih", "Ref", "RPM aralığı", "Slice"]
+        )
+        self._runs_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._runs_table.setSelectionMode(QTableWidget.SingleSelection)
+        self._runs_table.itemSelectionChanged.connect(self._on_selection_changed)
+        runs_body.addWidget(self._runs_table)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self._set_ref_btn  = QPushButton("Referans olarak seç")
+        self._set_meas_btn = QPushButton("Ölçüm olarak seç")
+        for b in (self._set_ref_btn, self._set_meas_btn):
+            b.setObjectName("btnBrowse")
+            b.setEnabled(False)
+        self._set_ref_btn.clicked.connect(self._mark_as_ref)
+        self._set_meas_btn.clicked.connect(self._mark_as_meas)
+        action_row.addWidget(self._set_ref_btn)
+        action_row.addWidget(self._set_meas_btn)
+
+        toggle_btn = QPushButton("DB'de referans bayrağını çevir ↻")
+        toggle_btn.setObjectName("btnBrowse")
+        toggle_btn.setToolTip("Seçili satırın is_reference değerini tersine çevirir.")
+        toggle_btn.clicked.connect(self._toggle_reference_flag)
+        action_row.addWidget(toggle_btn)
+        action_row.addStretch()
+        runs_body.addLayout(action_row)
+
+        outer.addWidget(runs_card, stretch=1)
+
+        # ── Seçim özeti + çalıştır ──────────────────────────────────────
+        summary_card, summary_body = _card("🎯  Analiz")
+        self._ref_label  = QLabel("Referans: —")
+        self._meas_label = QLabel("Ölçüm:   —")
+        for lbl in (self._ref_label, self._meas_label):
+            lbl.setObjectName("fieldLabel")
+            f = lbl.font()
+            f.setBold(True)
+            lbl.setFont(f)
+            summary_body.addWidget(lbl)
+
+        run_row = QHBoxLayout()
+        self._run_btn = QPushButton("▶  Analizi Başlat")
+        self._run_btn.setObjectName("btnPrimary")
+        self._run_btn.setFixedHeight(40)
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._run_analysis)
+        run_row.addWidget(self._run_btn)
+        run_row.addStretch()
+        summary_body.addLayout(run_row)
+
+        outer.addWidget(summary_card)
+
+        log_card, log_body = _card("📋  İşlem Günlüğü")
+        self._log = LogPanel()
+        self._log.setMaximumHeight(140)
+        log_body.addWidget(self._log)
+        outer.addWidget(log_card)
+
+        self._overlay = LoadingOverlay(self)
+        QTimer.singleShot(0, self._init_store)
+
+    @staticmethod
+    def _lbl(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("fieldLabel")
+        return lbl
+
+    # ── DB yaşam döngüsü ──────────────────────────────────────────────────
+
+    def _init_store(self) -> None:
+        try:
+            self._store = DataStore()
+            self._refresh_all()
+        except Exception as exc:
+            logger.error("DataStore acilamadi: %s", exc)
+            QMessageBox.critical(
+                self, "Veritabanı Hatası", f"DataStore açılamadı:\n{exc}"
+            )
+
+    def runs_changed(self) -> None:
+        """Veri Yükle sayfası yeni satır eklediğinde çağrılır."""
+        self._refresh_all()
+
+    def resizeEvent(self, event):
+        self._overlay.setGeometry(self.rect())
+        super().resizeEvent(event)
+
+    # ── Liste populate ────────────────────────────────────────────────────
+
+    def _refresh_all(self) -> None:
+        if self._store is None:
+            return
+        prev_engine = self._engine_combo.currentText()
+        engines = self._store.list_engines()
+        self._engine_combo.blockSignals(True)
+        self._engine_combo.clear()
+        self._engine_combo.addItems(engines)
+        if prev_engine in engines:
+            self._engine_combo.setCurrentText(prev_engine)
+        self._engine_combo.blockSignals(False)
+        self._on_engine_changed(self._engine_combo.currentText())
+
+    def _on_engine_changed(self, engine_id: str) -> None:
+        if self._store is None or not engine_id:
+            self._channel_combo.clear()
+            self._runs_table.setRowCount(0)
+            return
+        channels = self._store.list_channels(engine_id)
+        prev_data = self._channel_combo.currentData()
+        self._channel_combo.blockSignals(True)
+        self._channel_combo.clear()
+        for ch in channels:
+            label = (
+                f"{ch['sensor_location']} / {ch['axis']}   "
+                f"({ch['n_runs']} run, {ch['n_refs']} ref)"
+            )
+            self._channel_combo.addItem(
+                label, (ch["sensor_location"], ch["axis"])
+            )
+        if prev_data is not None:
+            for i in range(self._channel_combo.count()):
+                if self._channel_combo.itemData(i) == prev_data:
+                    self._channel_combo.setCurrentIndex(i)
+                    break
+        self._channel_combo.blockSignals(False)
+        self._on_channel_changed(self._channel_combo.currentIndex())
+
+    def _on_channel_changed(self, idx: int) -> None:
+        self._sel_ref_id  = None
+        self._sel_meas_id = None
+        self._update_summary()
+
+        if self._store is None or idx < 0:
+            self._runs_table.setRowCount(0)
+            return
+        data = self._channel_combo.itemData(idx)
+        engine = self._engine_combo.currentText()
+        if not engine or not data:
+            self._runs_table.setRowCount(0)
+            return
+        location, axis = data
+        rows = self._store.list_runs(
+            engine_id=engine, sensor_location=location, axis=axis,
+        )
+        self._fill_runs_table(rows)
+
+    def _fill_runs_table(self, rows) -> None:
+        self._runs_table.setRowCount(0)
+        for r in rows:
+            i = self._runs_table.rowCount()
+            self._runs_table.insertRow(i)
+            id_item = _table_item(str(r.id), "#8b949e")
+            id_item.setData(Qt.UserRole, int(r.id))
+            self._runs_table.setItem(i, 0, id_item)
+            self._runs_table.setItem(i, 1, _table_item(r.run_id, bold=True))
+            date_str = r.measurement_date.isoformat() if r.measurement_date else "—"
+            self._runs_table.setItem(i, 2, _table_item(date_str))
+            if r.is_reference:
+                self._runs_table.setItem(i, 3, _table_item("REF", "#3fb950", bold=True))
+            else:
+                self._runs_table.setItem(i, 3, _table_item("—", "#8b949e"))
+            self._runs_table.setItem(
+                i, 4, _table_item(f"{r.rpm_min:.0f} – {r.rpm_max:.0f}")
+            )
+            self._runs_table.setItem(i, 5, _table_item(str(r.n_slices), "#8b949e"))
+
+    # ── Satır seçim aksiyonları ───────────────────────────────────────────
+
+    def _selected_id(self) -> Optional[int]:
+        items = self._runs_table.selectedItems()
+        if not items:
+            return None
+        row = items[0].row()
+        return self._runs_table.item(row, 0).data(Qt.UserRole)
+
+    def _on_selection_changed(self) -> None:
+        has = self._selected_id() is not None
+        self._set_ref_btn.setEnabled(has)
+        self._set_meas_btn.setEnabled(has)
+
+    def _mark_as_ref(self) -> None:
+        sel = self._selected_id()
+        if sel is None:
+            return
+        if sel == self._sel_meas_id:
+            self._sel_meas_id = None
+        self._sel_ref_id = sel
+        self._update_summary()
+
+    def _mark_as_meas(self) -> None:
+        sel = self._selected_id()
+        if sel is None:
+            return
+        if sel == self._sel_ref_id:
+            self._sel_ref_id = None
+        self._sel_meas_id = sel
+        self._update_summary()
+
+    def _toggle_reference_flag(self) -> None:
+        sel = self._selected_id()
+        if sel is None or self._store is None:
+            return
+        rows = [s for s in self._store.list_runs() if s.id == sel]
+        if not rows:
+            return
+        new_state = not rows[0].is_reference
+        self._store.set_reference(sel, new_state)
+        self._log.append_log(
+            f"id={sel} is_reference={'TRUE' if new_state else 'FALSE'}", "INFO",
+        )
+        self._on_channel_changed(self._channel_combo.currentIndex())
+
+    def _update_summary(self) -> None:
+        self._ref_label.setText(
+            f"Referans: id={self._sel_ref_id}" if self._sel_ref_id else "Referans: —"
+        )
+        self._meas_label.setText(
+            f"Ölçüm:   id={self._sel_meas_id}" if self._sel_meas_id else "Ölçüm:   —"
+        )
+        self._run_btn.setEnabled(
+            self._sel_ref_id is not None and self._sel_meas_id is not None
+            and self._sel_ref_id != self._sel_meas_id
+        )
+
+    # ── Analiz ────────────────────────────────────────────────────────────
+
+    def _run_analysis(self) -> None:
+        if self._sel_ref_id is None or self._sel_meas_id is None:
+            return
+        self._worker = DbAnalysisWorker(
+            ref_run_id=self._sel_ref_id,
+            meas_run_id=self._sel_meas_id,
+        )
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+
+        self._run_btn.setEnabled(False)
+        self._overlay.show_loading("Analiz çalışıyor…")
+        self._log.clear()
+        self._worker.start()
+
+    def _on_progress(self, msg: str) -> None:
+        self._log.append_log(msg, "INFO")
+        self._overlay._sub.setText(msg)
+
+    def _on_finished(self, report, order_data, ref_order_data, run, ref_run) -> None:
+        self._overlay.hide_loading()
+        self._update_summary()
+        self._log.append_log(
+            f"✓ Tamamlandı — Skor: {report.overall_health_score}/100  "
+            f"| Anomali: {len(report.anomalies)}",
+            "SUCCESS",
+        )
+        self.analysis_done.emit(report, order_data, ref_order_data, run, ref_run)
+
+    def _on_error(self, msg: str) -> None:
+        self._overlay.hide_loading()
+        self._update_summary()
+        self._log.append_log(f"✕ Hata: {msg}", "ERROR")
+        QMessageBox.critical(self, "Analiz Hatası", msg[:400])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE: SINGLE ANALYSIS  (eski, dosya-picker tabanlı — Faz 8'de silinecek)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PageSingleAnalysis(QWidget):
 
     analysis_done = Signal(object, object, object, object, object)
 
