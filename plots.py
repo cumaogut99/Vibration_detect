@@ -86,30 +86,38 @@ def plot_waterfall(
     freq_max: float = 3000.0,
     annotate_orders: bool = True,
 ) -> Figure:
-    """2D color-map waterfall: X=frequency, Y=RPM, color=amplitude."""
+    """2D color-map waterfall: X=frequency, Y=RPM, color=amplitude (g, log-norm)."""
+    from matplotlib.colors import LogNorm
+
     freq_mask = run.frequencies <= freq_max
     freqs = run.frequencies[freq_mask]
     amps = run.amplitudes[:, freq_mask]
 
-    # dB conversion (add small floor to avoid log(0))
-    amps_db = 20 * np.log10(np.maximum(amps, 1e-12))
-
     fig, ax = plt.subplots(figsize=(12, 6))
     _apply_theme(fig, ax)
 
-    # Meshgrid for pcolormesh
     F, R = np.meshgrid(freqs, run.rpm_values)
-    vmin, vmax = np.percentile(amps_db, [5, 99])
+
+    # Linear amplitudes with logarithmic color normalization: gives true g values
+    # on the colorbar while preserving visibility of small components across the
+    # spectrum's wide dynamic range.
+    positive = amps[amps > 0]
+    if positive.size == 0:
+        vmin, vmax = 1e-6, 1.0
+    else:
+        vmin = float(np.percentile(positive, 5))
+        vmax = float(np.percentile(positive, 99))
+        vmin = max(vmin, vmax * 1e-4)  # cap dynamic range at 4 decades
 
     mesh = ax.pcolormesh(
-        F, R, amps_db,
+        F, R, np.maximum(amps, vmin),
         cmap=THEME["colormap"],
-        vmin=vmin, vmax=vmax,
+        norm=LogNorm(vmin=vmin, vmax=vmax),
         shading="auto",
         rasterized=True,
     )
     cbar = fig.colorbar(mesh, ax=ax, pad=0.01)
-    cbar.set_label("Amplitude (dB)", color=THEME["text_muted"], fontsize=8)
+    cbar.set_label("Genlik (g, log ölçek)", color=THEME["text_muted"], fontsize=8)
     cbar.ax.tick_params(colors=THEME["text_muted"])
     cbar.outline.set_edgecolor(THEME["border"])
 
