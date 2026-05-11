@@ -192,9 +192,12 @@ class DemoWorker(QThread):
             frequencies = np.linspace(1, 3000, 800)
 
             BASE_AMPS = {
-                1.0: 0.05, 2.0: 0.08, 0.5: 0.02, 4.0: 0.03,
-                29.0: 0.015, 22.0: 0.010, 14.0: 0.008,
-                6.0: 0.012, 8.0: 0.010, 3.0: 0.006,
+                0.5: 0.02, 0.59: 0.04, 1.0: 0.05, 1.77: 0.018,
+                2.0: 0.08, 3.0: 0.006, 4.0: 0.03, 4.13: 0.008,
+                5.9: 0.007, 6.0: 0.012, 8.0: 0.010,
+                28.0: 0.004, 28.41: 0.003,
+                29.0: 0.015,
+                29.59: 0.003, 30.0: 0.004,
             }
 
             def build_spectrum(rpm_arr, fault_orders=None):
@@ -226,8 +229,8 @@ class DemoWorker(QThread):
             )
 
             engines = {
-                "ENG-042 (Magneto Disli Asinmasi)": {29.0: 3.2, 58.0: 2.1},
-                "ENG-043 (Dengesizlik)":             {1.0: 2.5, 2.0: 1.7},
+                "ENG-042 (Disli Kutusu Asinmasi)":   {29.0: 3.2, 58.0: 2.1, 28.0: 1.8, 30.0: 1.8},
+                "ENG-043 (Pervane Dengesizligi)":    {0.59: 2.8, 1.77: 2.0},
                 "ENG-044 (Yanma Anomalisi)":         {0.5: 2.8, 2.0: 2.2},
                 "ENG-045 (Saglikli)":                {},
             }

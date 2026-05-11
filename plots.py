@@ -56,6 +56,8 @@ CATEGORY_COLORS = {
     FaultCategory.MISALIGNMENT: "#d29922",
     FaultCategory.VALVE: "#f78166",
     FaultCategory.STRUCTURAL: "#8b949e",
+    FaultCategory.PROPELLER: "#bc8cff",
+    FaultCategory.MOUNT: "#d29922",
 }
 
 

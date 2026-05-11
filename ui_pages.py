@@ -439,7 +439,7 @@ class PageDemoRun(QWidget):
 
         outer.addWidget(_page_header(
             "⚡  Demo Çalıştır",
-            "Sentetik veri ile 4 motoru (magneto arızası, dengesizlik, yanma anomalisi, sağlıklı) analiz edin.",
+            "Sentetik veri ile 4 motoru (dişli kutusu, pervane, yanma anomalisi, sağlıklı) analiz edin.",
         ))
         outer.addWidget(Divider())
 
@@ -447,9 +447,9 @@ class PageDemoRun(QWidget):
         info_card, info_body = _card("ℹ️  Demo Hakkında")
         desc = QLabel(
             "Demo modu şu sentetik motorları oluşturur:\n\n"
-            "  •  ENG-042  —  Magneto Dişli Aşınması  (29× ve 58× order yüksek)\n"
-            "  •  ENG-043  —  Kütle Dengesizliği  (1× ve 2× order yüksek)\n"
-            "  •  ENG-044  —  Yanma Anomalisi / Misfire  (0.5× ve 2× order yüksek)\n"
+            "  •  ENG-042  —  Dişli Kutusu Aşınması  (29× + 28/30× yan bantlar + 58× yüksek)\n"
+            "  •  ENG-043  —  Pervane Dengesizliği  (0.59× ve 1.77× yüksek)\n"
+            "  •  ENG-044  —  Yanma Anomalisi / Misfire  (0.5× ve 2× yüksek)\n"
             "  •  ENG-045  —  Sağlıklı Motor  (referansa yakın)\n\n"
             "Gerçek verilerle kullanım için 'Tek Motor' veya 'Filo Analizi' sayfasını kullanın."
         )
@@ -508,8 +508,8 @@ class PageDemoRun(QWidget):
         self._score_table.insertRow(row)
         color = "#3fb950" if score >= 80 else "#d29922" if score >= 55 else "#f85149"
         fault_hints = {
-            "ENG-042": "Magneto Dişli Aşınması",
-            "ENG-043": "Kütle Dengesizliği",
+            "ENG-042": "Dişli Kutusu Aşınması",
+            "ENG-043": "Pervane Dengesizliği",
             "ENG-044": "Yanma Anomalisi",
             "ENG-045": "Sağlıklı",
         }
@@ -806,6 +806,8 @@ class PageEngineConfig(QWidget):
             "Mechanical": "#f0883e",
             "Bearing": "#bc8cff",
             "Misalignment": "#d29922",
+            "Propeller": "#bc8cff",
+            "Engine Mount": "#d29922",
         }
         for order, odef in sorted(ORDER_DEFINITIONS.items()):
             row = order_tbl.rowCount()
