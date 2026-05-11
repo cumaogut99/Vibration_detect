@@ -5,8 +5,9 @@ Analiz islemi UI'yi bloke etmemek icin QThread uzerinde calisir.
 
 import logging
 import traceback
+from datetime import date
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -15,6 +16,7 @@ from models import DataType, EngineRun
 from engine_config import ORDER_DEFINITIONS
 from importers import ImporterFactory
 from analysis import build_default_analyzer, OrderExtractor
+from db_layer import DataStore
 
 logger = logging.getLogger(__name__)
 
@@ -257,4 +259,79 @@ class DemoWorker(QThread):
 
         except Exception as exc:
             logger.error("DemoWorker hatasi: %s", exc)
+            self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")
+
+
+# ---------------------------------------------------------------------------
+#  DATA INGEST  (CSV -> DuckDB)
+# ---------------------------------------------------------------------------
+
+class DataIngestWorker(QThread):
+    """
+    Bir CSV/NPZ/TXT dosyasini ImporterFactory ile yukleyip DataStore'a yazar.
+
+    DuckDB baglantisi thread-safe degildir; DataStore instance worker'in
+    kendi run() metodu icinde acilir.
+
+    Sinyaller:
+      progress(str)
+      finished(new_id: int, engine_id: str, run_id: str)
+      error(str)
+    """
+
+    progress = Signal(str)
+    finished = Signal(int, str, str)
+    error    = Signal(str)
+
+    def __init__(
+        self,
+        file_path: str,
+        engine_id: str,
+        run_id: str,
+        sensor_location: str,
+        axis: str,
+        is_reference: bool,
+        measurement_date: Optional[date] = None,
+        db_path: Optional[Path] = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._file_path  = file_path
+        self._engine_id  = engine_id
+        self._run_id     = run_id
+        self._sensor     = sensor_location
+        self._axis       = axis
+        self._is_ref     = bool(is_reference)
+        self._meas_date  = measurement_date
+        self._db_path    = db_path
+
+    def run(self):
+        try:
+            self.progress.emit(f"Dosya yukleniyor: {Path(self._file_path).name}")
+            factory = ImporterFactory()
+            run = factory.load(
+                Path(self._file_path),
+                self._engine_id,
+                self._run_id,
+                self._sensor,
+                self._axis,
+                is_reference=self._is_ref,
+            )
+
+            self.progress.emit("Veritabanina yaziliyor...")
+            with DataStore(db_path=self._db_path) as store:
+                new_id = store.insert_run(
+                    run,
+                    source_file=str(self._file_path),
+                    measurement_date=self._meas_date,
+                )
+
+            self.progress.emit(
+                f"OK — id={new_id} engine={self._engine_id} "
+                f"ch={self._sensor}/{self._axis} ({run.n_slices} slice)"
+            )
+            self.finished.emit(int(new_id), self._engine_id, self._run_id)
+
+        except Exception as exc:
+            logger.error("DataIngestWorker hatasi: %s", exc)
             self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")

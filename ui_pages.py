@@ -2,8 +2,9 @@
 ui_pages.py — Tüm sayfa widget'ları.
 
 Sayfalar:
-  PageSingleAnalysis  — Tek motor analizi
-  PageFleetAnalysis   — Filo analizi
+  PageDataIngest      — CSV -> DuckDB veri yükleme
+  PageSingleAnalysis  — Tek motor analizi (eski; dosya picker)
+  PageFleetAnalysis   — Filo analizi (eski; dosya picker)
   PageDemoRun         — Demo / sentetik veri
   PageResults         — Sonuç görüntüleyici (waterfall + order + diagnose)
   PageEngineConfig    — Engine config'i göster/açıkla
@@ -17,17 +18,21 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QSplitter, QTabWidget, QTableWidget,
     QTableWidgetItem, QComboBox, QLineEdit, QHeaderView,
-    QSizePolicy, QMessageBox, QTextEdit,
+    QSizePolicy, QMessageBox, QTextEdit, QCheckBox, QDateEdit,
+    QCompleter,
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QDate
 from PySide6.QtGui import QColor, QFont
 
-from ui_worker import AnalysisWorker, FleetAnalysisWorker, DemoWorker
+from ui_worker import (
+    AnalysisWorker, FleetAnalysisWorker, DemoWorker, DataIngestWorker,
+)
 from ui_widgets import (
     SectionTitle, Divider, StatusBadge, HealthScoreDial,
     EngineCard, FilePickerRow, FolderPickerRow,
     LoadingOverlay, LogPanel, MatplotlibCanvas, WaterfallControlBar,
 )
+from db_layer import DataStore
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +117,287 @@ def _severity_color(sev: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  PAGE: SINGLE ANALYSIS
+#  PAGE: DATA INGEST  (CSV → DuckDB)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PageSingleAnalysis(QWidget):
+class PageDataIngest(QWidget):
+    """
+    CSV / NPZ / TXT dosyalarını seçip motor / kanal / referans
+    metadata'sıyla birlikte DuckDB'ye yazan sayfa.
+
+    ``runs_changed`` sinyali tablo güncellendiğinde fırlatılır; diğer
+    DB-tabanlı sayfalar bu sinyale bağlanarak kendi listelerini
+    tazeleyebilir.
+    """
+
+    runs_changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("pageContent")
+        self._worker: Optional[DataIngestWorker] = None
+        self._store: Optional[DataStore] = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(20)
+
+        outer.addWidget(_page_header(
+            "📥  Veri Yükle",
+            "CSV/NPZ/TXT dosyalarını veritabanına aktarın. "
+            "Dosya adından otomatik motor / lokasyon / eksen çıkarımı yapılır.",
+        ))
+        outer.addWidget(Divider())
+
+        cols = QHBoxLayout()
+        cols.setSpacing(16)
+        outer.addLayout(cols, stretch=1)
+
+        # ── Sol: form ─────────────────────────────────────────────────────
+        left = QVBoxLayout()
+        left.setSpacing(14)
+        cols.addLayout(left, stretch=0)
+
+        # Dosya seçme kartı
+        file_card, file_body = _card("📂  Veri Dosyası")
+        self._picker = FilePickerRow("Dosya:")
+        self._picker.file_selected.connect(self._on_file_selected)
+        file_body.addWidget(self._picker)
+        autofill_btn = QPushButton("Dosya adından alanları doldur")
+        autofill_btn.setObjectName("btnBrowse")
+        autofill_btn.clicked.connect(self._autofill_from_filename)
+        file_body.addWidget(autofill_btn)
+        left.addWidget(file_card)
+
+        # Metadata kartı
+        meta_card, meta_body = _card("🏷️  Metadata")
+
+        self._engine_id = QLineEdit()
+        self._engine_id.setPlaceholderText("ENG-042")
+        # Autocomplete daha sonra populate edilir
+        self._engine_completer = QCompleter([], self)
+        self._engine_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._engine_id.setCompleter(self._engine_completer)
+        meta_body.addLayout(_field_row("Motor ID:", self._engine_id))
+
+        from engine_config import LOCATION_CODES, LOCATION_NAMES
+        self._location = QComboBox()
+        for code in LOCATION_CODES:
+            self._location.addItem(f"{code}  —  {LOCATION_NAMES[code]}", code)
+        meta_body.addLayout(_field_row("Lokasyon:", self._location))
+
+        self._axis = QComboBox()
+        self._axis.addItems(["X", "Y", "Z"])
+        meta_body.addLayout(_field_row("Eksen:", self._axis))
+
+        self._run_id = QLineEdit()
+        self._run_id.setPlaceholderText("RUN-001")
+        meta_body.addLayout(_field_row("Run ID:", self._run_id))
+
+        self._date = QDateEdit()
+        self._date.setDisplayFormat("yyyy-MM-dd")
+        self._date.setCalendarPopup(True)
+        self._date.setDate(QDate.currentDate())
+        meta_body.addLayout(_field_row("Ölçüm tarihi:", self._date))
+
+        self._is_ref = QCheckBox("Bu kanal için referans olarak işaretle")
+        meta_body.addWidget(self._is_ref)
+
+        left.addWidget(meta_card)
+
+        # Çalıştır butonu
+        self._save_btn = QPushButton("💾  Veritabanına Yaz")
+        self._save_btn.setObjectName("btnPrimary")
+        self._save_btn.setFixedHeight(42)
+        self._save_btn.clicked.connect(self._save_to_db)
+        left.addWidget(self._save_btn)
+
+        # DB konum bilgisi
+        path_lbl = QLabel("")
+        path_lbl.setObjectName("fieldLabel")
+        path_lbl.setWordWrap(True)
+        self._path_lbl = path_lbl
+        left.addWidget(path_lbl)
+
+        left.addStretch()
+
+        # ── Sağ: son eklenenler tablosu + log ────────────────────────────
+        right = QVBoxLayout()
+        right.setSpacing(12)
+        cols.addLayout(right, stretch=1)
+
+        recent_card, recent_body = _card("🗂️  Son Eklenen Run'lar")
+        self._recent_table = _make_table(
+            ["ID", "Motor", "Lokasyon", "Eksen", "Run", "Tarih", "Ref", "Slice"]
+        )
+        self._recent_table.setMinimumHeight(280)
+        recent_body.addWidget(self._recent_table)
+        right.addWidget(recent_card, stretch=1)
+
+        log_card, log_body = _card("📋  İşlem Günlüğü")
+        self._log = LogPanel()
+        self._log.setMaximumHeight(140)
+        log_body.addWidget(self._log)
+        right.addWidget(log_card)
+
+        self._overlay = LoadingOverlay(self)
+
+        # DB'yi aç + tabloyu doldur
+        QTimer.singleShot(0, self._init_store)
+
+    # ── Yaşam döngüsü ─────────────────────────────────────────────────────
+
+    def _init_store(self) -> None:
+        try:
+            self._store = DataStore()
+            self._path_lbl.setText(f"DB: {self._store.db_path}")
+            self._refresh_recent()
+            self._refresh_engine_completer()
+        except Exception as exc:
+            logger.error("DataStore acilamadi: %s", exc)
+            QMessageBox.critical(
+                self, "Veritabanı Hatası",
+                f"DataStore açılamadı:\n{exc}",
+            )
+
+    def resizeEvent(self, event):
+        self._overlay.setGeometry(self.rect())
+        super().resizeEvent(event)
+
+    # ── Dosya → form ──────────────────────────────────────────────────────
+
+    def _on_file_selected(self, path: str) -> None:
+        # Default run_id = stem of file if user hasn't typed anything yet
+        if not self._run_id.text().strip():
+            self._run_id.setText(Path(path).stem[:32])
+        # Try auto-parse silently
+        self._autofill_from_filename(silent=True)
+
+    def _autofill_from_filename(self, silent: bool = False) -> None:
+        from importers import parse_filename
+        path = self._picker.path()
+        if not path:
+            if not silent:
+                QMessageBox.information(
+                    self, "Dosya yok", "Önce bir veri dosyası seçin."
+                )
+            return
+        parsed = parse_filename(Path(path))
+        if not parsed:
+            if not silent:
+                QMessageBox.information(
+                    self, "Parse edilemedi",
+                    "Dosya adı standart formatla eşleşmedi:\n"
+                    "  ENGINE-ID__YYYYMMDD__LOCATION__AXIS__RUN-ID.csv",
+                )
+            return
+
+        self._engine_id.setText(parsed["engine_id"])
+        self._run_id.setText(parsed["run_id"])
+        # Lokasyon combobox
+        loc = parsed["location"]
+        idx = self._location.findData(loc)
+        if idx >= 0:
+            self._location.setCurrentIndex(idx)
+        # Eksen
+        axis_idx = self._axis.findText(parsed["axis"])
+        if axis_idx >= 0:
+            self._axis.setCurrentIndex(axis_idx)
+        # Tarih
+        d = parsed.get("date") or ""
+        if len(d) == 8 and d.isdigit():
+            self._date.setDate(QDate(int(d[:4]), int(d[4:6]), int(d[6:8])))
+
+        self._log.append_log(
+            f"Dosya adından çıkarıldı: {parsed['engine_id']} "
+            f"/ {loc}{parsed['axis']} / {parsed['run_id']}",
+            "INFO",
+        )
+
+    # ── Kaydetme ──────────────────────────────────────────────────────────
+
+    def _save_to_db(self) -> None:
+        path = self._picker.path()
+        if not path:
+            QMessageBox.warning(self, "Eksik giriş", "Lütfen bir veri dosyası seçin.")
+            return
+        engine_id = self._engine_id.text().strip()
+        if not engine_id:
+            QMessageBox.warning(self, "Eksik giriş", "Motor ID boş olamaz.")
+            return
+        run_id = self._run_id.text().strip() or "RUN-001"
+        location = self._location.currentData() or self._location.currentText().split()[0]
+        axis = self._axis.currentText()
+        is_ref = self._is_ref.isChecked()
+        meas_date = self._date.date().toPython()
+
+        self._worker = DataIngestWorker(
+            file_path=path,
+            engine_id=engine_id,
+            run_id=run_id,
+            sensor_location=location,
+            axis=axis,
+            is_reference=is_ref,
+            measurement_date=meas_date,
+        )
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+
+        self._save_btn.setEnabled(False)
+        self._overlay.show_loading("Veritabanına yazılıyor…", engine_id)
+        self._worker.start()
+
+    def _on_progress(self, msg: str) -> None:
+        self._log.append_log(msg, "INFO")
+        self._overlay._sub.setText(msg)
+
+    def _on_finished(self, new_id: int, engine_id: str, run_id: str) -> None:
+        self._overlay.hide_loading()
+        self._save_btn.setEnabled(True)
+        self._log.append_log(
+            f"✓ Yazıldı — id={new_id}  motor={engine_id}  run={run_id}",
+            "SUCCESS",
+        )
+        self._refresh_recent()
+        self._refresh_engine_completer()
+        self.runs_changed.emit()
+
+    def _on_error(self, msg: str) -> None:
+        self._overlay.hide_loading()
+        self._save_btn.setEnabled(True)
+        self._log.append_log(f"✕ Hata: {msg}", "ERROR")
+        QMessageBox.critical(self, "Yazma Hatası", msg[:400])
+
+    # ── Yardımcılar ───────────────────────────────────────────────────────
+
+    def _refresh_recent(self) -> None:
+        if self._store is None:
+            return
+        rows = self._store.list_runs()
+        self._recent_table.setRowCount(0)
+        for r in rows[:50]:
+            i = self._recent_table.rowCount()
+            self._recent_table.insertRow(i)
+            self._recent_table.setItem(i, 0, _table_item(str(r.id), "#8b949e"))
+            self._recent_table.setItem(i, 1, _table_item(r.engine_id, bold=True))
+            self._recent_table.setItem(i, 2, _table_item(r.sensor_location))
+            self._recent_table.setItem(i, 3, _table_item(r.axis))
+            self._recent_table.setItem(i, 4, _table_item(r.run_id))
+            date_str = r.measurement_date.isoformat() if r.measurement_date else "—"
+            self._recent_table.setItem(i, 5, _table_item(date_str))
+            if r.is_reference:
+                self._recent_table.setItem(i, 6, _table_item("REF", "#3fb950", bold=True))
+            else:
+                self._recent_table.setItem(i, 6, _table_item("—", "#8b949e"))
+            self._recent_table.setItem(i, 7, _table_item(str(r.n_slices), "#8b949e"))
+
+    def _refresh_engine_completer(self) -> None:
+        if self._store is None:
+            return
+        from PySide6.QtCore import QStringListModel
+        engines = self._store.list_engines()
+        self._engine_completer.setModel(QStringListModel(engines, self._engine_completer))
 
     analysis_done = Signal(object, object, object, object, object)
 
