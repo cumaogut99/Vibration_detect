@@ -35,8 +35,9 @@ from ui_widgets import (
     EngineCard, LoadingOverlay, LogPanel,
 )
 from ui_pages import (
-    PageSingleAnalysis,
-    PageFleetAnalysis,
+    PageDataIngest,
+    PageDbSingleAnalysis,
+    PageDbFleetAnalysis,
     PageDemoRun,
     PageResults,
     PageEngineConfig,
@@ -114,28 +115,34 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._stack, stretch=1)
 
         # ── Pages ─────────────────────────────────────────────────────────
-        self._page_single  = PageSingleAnalysis(self)
-        self._page_fleet   = PageFleetAnalysis(self)
+        self._page_ingest  = PageDataIngest(self)
+        self._page_single  = PageDbSingleAnalysis(self)
+        self._page_fleet   = PageDbFleetAnalysis(self)
         self._page_demo    = PageDemoRun(self)
         self._page_results = PageResults(self)
         self._page_config  = PageEngineConfig(self)
 
-        self._stack.addWidget(self._page_single)   # index 0
-        self._stack.addWidget(self._page_fleet)    # index 1
-        self._stack.addWidget(self._page_demo)     # index 2
-        self._stack.addWidget(self._page_results)  # index 3
-        self._stack.addWidget(self._page_config)   # index 4
+        self._stack.addWidget(self._page_ingest)   # index 0
+        self._stack.addWidget(self._page_single)   # index 1
+        self._stack.addWidget(self._page_fleet)    # index 2
+        self._stack.addWidget(self._page_demo)     # index 3
+        self._stack.addWidget(self._page_results)  # index 4
+        self._stack.addWidget(self._page_config)   # index 5
 
-        # Connect page signals to result viewer
+        # Connect page signals
         self._page_single.analysis_done.connect(self._on_analysis_done)
         self._page_fleet.analysis_done.connect(self._on_fleet_done)
         self._page_demo.analysis_done.connect(self._on_fleet_done)
+
+        # Veri Yükle -> diğer DB-tabanlı sayfaları otomatik tazele
+        self._page_ingest.runs_changed.connect(self._page_single.runs_changed)
+        self._page_ingest.runs_changed.connect(self._page_fleet.runs_changed)
 
         # ── Status bar ────────────────────────────────────────────────────
         self._status = QStatusBar()
         self._status.setObjectName("statusBar")
         self.setStatusBar(self._status)
-        self._status.showMessage("Hazır  ·  Veri dosyası yükleyin veya Demo çalıştırın")
+        self._status.showMessage("Hazır  ·  Önce 'Veri Yükle' ile DB'ye CSV aktarın veya Demo çalıştırın")
 
         # Select first page
         self._select_page(0)
@@ -169,17 +176,29 @@ class MainWindow(QMainWindow):
         layout.addWidget(Divider())
 
         # Nav section label
-        nav_label = QLabel("  ANALİZ")
-        nav_label.setObjectName("navSection")
-        layout.addWidget(nav_label)
+        nav_label_data = QLabel("  VERİ")
+        nav_label_data.setObjectName("navSection")
+        layout.addWidget(nav_label_data)
 
-        # Nav buttons
         self._nav_buttons: list[NavButton] = []
 
+        # Veri Yükle — sidebar'ın üstünde
+        btn_ingest = NavButton("📥  Veri Yükle", 0)
+        btn_ingest.clicked.connect(lambda: self._select_page(0))
+        self._nav_buttons.append(btn_ingest)
+        layout.addWidget(btn_ingest)
+
+        layout.addSpacing(12)
+        layout.addWidget(Divider())
+
+        nav_label_an = QLabel("  ANALİZ")
+        nav_label_an.setObjectName("navSection")
+        layout.addWidget(nav_label_an)
+
         items = [
-            ("🔍  Tek Motor Analizi",  0),
-            ("🚁  Filo Analizi",       1),
-            ("⚡  Demo Çalıştır",      2),
+            ("🔍  Tek Motor Analizi",  1),
+            ("🚁  Filo Analizi",       2),
+            ("⚡  Demo Çalıştır",      3),
         ]
         for label, idx in items:
             btn = NavButton(label, idx)
@@ -194,13 +213,13 @@ class MainWindow(QMainWindow):
         nav_label2.setObjectName("navSection")
         layout.addWidget(nav_label2)
 
-        btn_results = NavButton("📊  Son Sonuçlar", 3)
-        btn_results.clicked.connect(lambda: self._select_page(3))
+        btn_results = NavButton("📊  Son Sonuçlar", 4)
+        btn_results.clicked.connect(lambda: self._select_page(4))
         self._nav_buttons.append(btn_results)
         layout.addWidget(btn_results)
 
-        btn_config = NavButton("⚙️  Motor Konfigürasyonu", 4)
-        btn_config.clicked.connect(lambda: self._select_page(4))
+        btn_config = NavButton("⚙️  Motor Konfigürasyonu", 5)
+        btn_config.clicked.connect(lambda: self._select_page(5))
         self._nav_buttons.append(btn_config)
         layout.addWidget(btn_config)
 
@@ -224,7 +243,7 @@ class MainWindow(QMainWindow):
 
     def _on_analysis_done(self, report, order_data, ref_order_data, run, ref_run) -> None:
         self._page_results.show_single(report, order_data, ref_order_data, run, ref_run)
-        self._select_page(3)
+        self._select_page(4)
         self._status.showMessage(
             f"Analiz tamamlandı  ·  {report.engine_id}  ·  "
             f"Skor: {report.overall_health_score}/100  ·  "
@@ -233,7 +252,7 @@ class MainWindow(QMainWindow):
 
     def _on_fleet_done(self, reports: dict, ref_run) -> None:
         self._page_results.show_fleet(reports, ref_run)
-        self._select_page(3)
+        self._select_page(4)
         self._status.showMessage(
             f"Filo analizi tamamlandı  ·  {len(reports)} motor"
         )
