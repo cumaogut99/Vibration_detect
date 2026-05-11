@@ -96,6 +96,11 @@ class OrderDefinition:
     dominant_locations: List[str] = field(default_factory=list)
     # Hangi eksende daha belirgin: "X" | "Y" | "Z" | "all"
     dominant_axis: str            = "all"
+    # Order ekstraksiyonunda bu order'a özgü tolerans (±oran). None → analiz
+    # motorunun varsayılan toleransı (genelde 5%) kullanılır.
+    # Yan bantlar (28x, 28.41x, 29.59x, 30x) GMF'den (29x) ayrılabilmek için
+    # daha sıkı tolerans gerektirir.
+    tolerance_override: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -138,18 +143,14 @@ ENGINE_CONFIG = {
     "gear_ratio_reduction":   0.59,
     "gear_ratio_description": "Redüksiyon dişli: pervane mili = krank mili x 0.59",
 
-    # Aksesuar dişli diş sayıları (KRANK MİLİ referansı ile)
-    # NOT: Aksesuar millerinin krank hızına göre devir oranı dikkate alınır.
-    #      Krank-referanslı order = (diş sayısı) × (mil devir oranı)
+    # Aksesuar dişli diş sayıları / devir oranları (KRANK MİLİ referansı ile)
     "accessory_gear_teeth": {
         # Yağ pompası: krank x 0.59 hızında döner, 2 dişlisi (her biri 7 dişli) içte meshlenir
         #   Krank-referanslı GMF = 7 × 0.59 = 4.13x
         "oil_pump_teeth":     7,
         "oil_pump_speed_ratio": 0.59,
-        # Vakum pompası: diş sayısı henüz teyit bekliyor
-        "vacuum_pump_drive":  12,   # 12x order [teyit bekleniyor]
-        # Alternatör çarpanı (krank referansı)
-        "alternator_drive":    3,   # [teyit bekleniyor]
+        # Alternatör: krank x 5.9 hızında döner; kendi 1x orderı = 5.9x krank
+        "alternator_speed_ratio": 5.9,
     },
 
     # Pervane bilgileri
@@ -478,20 +479,14 @@ ORDER_DEFINITIONS: Dict[float, OrderDefinition] = {
 
     3.0: OrderDefinition(
         order=3.0,
-        name="3x",
-        source="Alternatör / Yapısal",
+        name="3x (Yapısal / Torsiyonel)",
+        source="Krank Torsiyonel / Yapısal Rezonans",
         description=(
-            "Alternatör sürücü çarpanı (3x). Aynı zamanda krank torsiyonel "
-            "rezonansı veya yapısal rezonans harmoniği olabilir."
+            "Krank mili torsiyonel rezonansı veya yapısal rezonans harmoniği. "
+            "Belirli RPM aralığında pik yapması torsiyonel rezonansa işaret eder."
         ),
-        fault_indicators=[
-            "Alternatör kayış gerilmesi / sürücü dişli aşınması",
-            "Krank torsiyonel rezonansı",
-            "Yapısal rezonans",
-        ],
-        category=FaultCategory.GEAR,
-        dominant_locations=["ALT"],
-        dominant_axis="X",
+        fault_indicators=["Krank torsiyonel rezonansı", "Yapısal rezonans"],
+        category=FaultCategory.STRUCTURAL,
     ),
 
     4.0: OrderDefinition(
@@ -523,6 +518,7 @@ ORDER_DEFINITIONS: Dict[float, OrderDefinition] = {
         fault_indicators=["Yağ pompası dişli aşınması", "Yağ pompası kavitasyonu", "Basınç pulsasyonu"],
         category=FaultCategory.GEAR,
         dominant_locations=["BLOK_3YAK", "BLOK_SOL"],
+        tolerance_override=0.015,   # 4x ile ayrılabilsin
     ),
 
     6.0: OrderDefinition(
@@ -548,17 +544,59 @@ ORDER_DEFINITIONS: Dict[float, OrderDefinition] = {
         dominant_axis="Y",
     ),
 
-    12.0: OrderDefinition(
-        order=12.0,
-        name="12x (Vakum Pompası Dişli GMF)",
-        source="Vakum Pompası Sürücü Dişlisi",
+    5.9: OrderDefinition(
+        order=5.9,
+        name="5.9x (Alternatör 1x)",
+        source="Alternatör Rotor Frekansı",
         description=(
-            "Vakum pompası sürücü dişlisi diş geçiş frekansı (12 diş x krank frekansı). "
-            "TODO: Diş sayısı teyit edilmemiştir."
+            "Alternatör rotorunun temel dönme frekansı (krank × 5.9). "
+            "Rotor kütle dengesizliği, kayış/kaplinde gevşeklik, alternatör yatak aşınması "
+            "bu orderı yükseltir. UYARI: 6x (valf treni) ile spektral olarak yakındır "
+            "(%1.7), ölçüm çözünürlüğüne göre ayırt etmek zor olabilir; birlikte değerlendirin."
         ),
-        fault_indicators=["Vakum pompası dişli aşınması", "Sürücü bağlantı aşınması"],
+        fault_indicators=[
+            "Alternatör rotor dengesizliği",
+            "Alternatör yatak aşınması",
+            "Kayış/kaplin gevşekliği",
+        ],
+        category=FaultCategory.IMBALANCE,
+        dominant_locations=["ALT"],
+        dominant_axis="all",
+        tolerance_override=0.008,   # 6x ile ayrılabilsin
+    ),
+
+    # ── Dişli kutusu yan bantları (GMF=29x etrafında) ────────────────────────
+    # Yan bant aralığı, hangi dişlinin hasarlı olduğunu söyler:
+    #   ±1x   (28x, 30x)     → pinyon (29-dişli, krank tarafı) tarafında hasar
+    #   ±0.59x (28.41, 29.59)→ çark (49-dişli, pervane tarafı) tarafında hasar
+    28.0: OrderDefinition(
+        order=28.0,
+        name="28x (GMF − 1x Pinyon Yan Bandı)",
+        source="Dişli Kutusu Pinyon Tarafı Modülasyonu",
+        description=(
+            "29x GMF − 1x (krank/pinyon mili frekansı) alt yan bandı. "
+            "Bu orderın 30x ile birlikte yükselmesi pinyon (29-dişli, motor tarafı) "
+            "üzerinde lokal bir hasar (kırık diş, çatlak, çukurlaşma) işaretidir."
+        ),
+        fault_indicators=["Pinyon dişlisi lokal hasarı", "Pinyon diş çatlağı / çukurlaşması"],
         category=FaultCategory.GEAR,
-        dominant_locations=["BLOK_3YAK", "BLOK_SOL"],
+        dominant_locations=["DISLI_PER", "DISLI_GOV"],
+        tolerance_override=0.012,   # 29x'ten ayrılabilsin
+    ),
+
+    28.41: OrderDefinition(
+        order=28.41,
+        name="28.41x (GMF − 0.59x Çark Yan Bandı)",
+        source="Dişli Kutusu Çark Tarafı Modülasyonu",
+        description=(
+            "29x GMF − 0.59x (pervane/çark mili frekansı) alt yan bandı. "
+            "Bu orderın 29.59x ile birlikte yükselmesi çark (49-dişli, pervane tarafı) "
+            "üzerinde lokal bir hasar işaretidir."
+        ),
+        fault_indicators=["Çark dişlisi lokal hasarı", "Çark diş kırılması / çukurlaşma"],
+        category=FaultCategory.GEAR,
+        dominant_locations=["DISLI_PER", "DISLI_GOV"],
+        tolerance_override=0.008,   # 28x ve 29x'ten ayrılabilsin
     ),
 
     29.0: OrderDefinition(
@@ -568,8 +606,10 @@ ORDER_DEFINITIONS: Dict[float, OrderDefinition] = {
         description=(
             "Redüksiyon dişli kutusunun ana dişli ağzı geçiş frekansı. "
             "CAD'den teyit: motor tarafı 29 dişli pinyon × pervane tarafı 49 dişli çark; "
-            "her iki dişli için aynı GMF = 29 × krank frekansı = 49 × 0.59 × krank ≈ 29x. "
-            "Hem dişli kutusu sensörlerinde (DISLI_PER / DISLI_GOV) hem de blok üzerinde görülebilir."
+            "her iki dişli için aynı GMF = 29 × krank = 49 × 0.59 × krank ≈ 29x. "
+            "TANI İPUCU: 29x etrafındaki yan bantların aralığı hangi dişlinin hasarlı "
+            "olduğunu söyler — ±1x bantları (28x, 30x) pinyon, ±0.59x bantları "
+            "(28.41x, 29.59x) çark tarafı hasarına işaret eder."
         ),
         fault_indicators=[
             "Dişli kutusu pinyon/çark aşınması",
@@ -580,6 +620,34 @@ ORDER_DEFINITIONS: Dict[float, OrderDefinition] = {
         category=FaultCategory.GEAR,
         dominant_locations=["DISLI_PER", "DISLI_GOV", "BLOK_3YAK"],
         dominant_axis="all",
+    ),
+
+    29.59: OrderDefinition(
+        order=29.59,
+        name="29.59x (GMF + 0.59x Çark Yan Bandı)",
+        source="Dişli Kutusu Çark Tarafı Modülasyonu",
+        description=(
+            "29x GMF + 0.59x (pervane/çark mili frekansı) üst yan bandı. "
+            "28.41x ile simetrik artış çark (49-dişli) tarafında hasar göstergesidir."
+        ),
+        fault_indicators=["Çark dişlisi lokal hasarı"],
+        category=FaultCategory.GEAR,
+        dominant_locations=["DISLI_PER", "DISLI_GOV"],
+        tolerance_override=0.008,
+    ),
+
+    30.0: OrderDefinition(
+        order=30.0,
+        name="30x (GMF + 1x Pinyon Yan Bandı)",
+        source="Dişli Kutusu Pinyon Tarafı Modülasyonu",
+        description=(
+            "29x GMF + 1x (krank/pinyon mili frekansı) üst yan bandı. "
+            "28x ile simetrik artış pinyon (29-dişli) tarafında hasar göstergesidir."
+        ),
+        fault_indicators=["Pinyon dişlisi lokal hasarı"],
+        category=FaultCategory.GEAR,
+        dominant_locations=["DISLI_PER", "DISLI_GOV"],
+        tolerance_override=0.012,
     ),
 
     58.0: OrderDefinition(
@@ -709,24 +777,81 @@ FAULT_SIGNATURES: List[FaultSignature] = [
     ),
 
     FaultSignature(
-        name="Dişli Kutusu Aşınması (Pinyon × Çark)",
+        name="Dişli Kutusu Genel Aşınma (Pinyon × Çark Mesh)",
         category=FaultCategory.GEAR,
         primary_orders=[29.0],
         secondary_orders=[58.0, 87.0],
         description=(
             "29x order artışı redüksiyon dişli kutusunun ana mesh'inde (29 dişli pinyon × "
-            "49 dişli çark) aşınmaya işaret eder. 58x ve 87x harmoniklerinin eklenmesi "
-            "hasarın ilerlediğini, diş profillerinin bozulduğunu gösterir. "
-            "Dişli kutusu sensörlerinde (DISLI_PER, DISLI_GOV) en belirgin görülür."
+            "49 dişli çark) genel aşınmaya işaret eder. 58x ve 87x harmonikleri eklendiğinde "
+            "hasar ilerliyor demektir. Hangi dişlide olduğunu daraltmak için yan bant "
+            "imzalarına bakın (pinyon: ±1x, çark: ±0.59x)."
         ),
         recommendation=(
             "Dişli kutusu kapağını açıp pinyon ve çark dişlerini çukurlaşma (pitting), "
             "soyulma (spalling) ve boşluk (backlash) açısından inceleyin. "
-            "Dişli yatak boşluklarını ölçün. Yağ sirkülasyonu ve filtre üzerindeki "
-            "metal partikül durumunu kontrol edin."
+            "Dişli yatak boşluklarını ölçün. Yağ filtresinde metal partikül analizi yapın."
         ),
         amplitude_ratio_threshold=1.4,
         relevant_locations=["DISLI_PER", "DISLI_GOV", "BLOK_3YAK"],
+    ),
+
+    FaultSignature(
+        name="Dişli Kutusu Pinyon (29-Dişli, Motor Tarafı) Lokal Hasarı",
+        category=FaultCategory.GEAR,
+        primary_orders=[28.0, 30.0],
+        secondary_orders=[29.0],
+        description=(
+            "29x GMF etrafında ±1x (krank/pinyon mili frekansı) aralıklı yan bantlar "
+            "(28x ve 30x) pinyon dişlisi üzerinde lokal bir kusura işaret eder — "
+            "tek bir kırık/çatlak diş, çukurlaşma veya pitting. "
+            "Yan bant aralığı = hasarlı dişlinin dönüş frekansı."
+        ),
+        recommendation=(
+            "Krank tarafı 29-dişli pinyonu, dişleri tek tek inceleyin. "
+            "Kırık veya hasarlı diş ararken büyüteç ve fluoresan boya kullanın. "
+            "Pinyon mili yatak boşluğunu da ölçün."
+        ),
+        amplitude_ratio_threshold=1.3,
+        relevant_locations=["DISLI_PER", "DISLI_GOV"],
+    ),
+
+    FaultSignature(
+        name="Dişli Kutusu Çark (49-Dişli, Pervane Tarafı) Lokal Hasarı",
+        category=FaultCategory.GEAR,
+        primary_orders=[28.41, 29.59],
+        secondary_orders=[29.0],
+        description=(
+            "29x GMF etrafında ±0.59x (pervane/çark mili frekansı) aralıklı yan bantlar "
+            "(28.41x ve 29.59x) çark dişlisi üzerinde lokal bir kusura işaret eder. "
+            "Yan bant aralığı = hasarlı dişlinin dönüş frekansı (= 0.59x krank)."
+        ),
+        recommendation=(
+            "Pervane tarafı 49-dişli çarkı, dişleri tek tek inceleyin. "
+            "Pervane mili yatak boşluğunu ölçün. "
+            "Pinyon dişlerini de kontrol edin (hasarın yayılmadığından emin olmak için)."
+        ),
+        amplitude_ratio_threshold=1.3,
+        relevant_locations=["DISLI_PER", "DISLI_GOV"],
+    ),
+
+    FaultSignature(
+        name="Alternatör Rotor Dengesizliği / Yatak Aşınması",
+        category=FaultCategory.IMBALANCE,
+        primary_orders=[5.9],
+        secondary_orders=[11.8],
+        description=(
+            "5.9x order (alternatör 1x = krank × 5.9) artışı alternatör rotorunda "
+            "kütle dengesizliğine veya rotor yataklarında aşınmaya işaret eder. "
+            "11.8x harmoniğinin eklenmesi yatak problemini öne çıkarır."
+        ),
+        recommendation=(
+            "Alternatör kayış gerilmesini kontrol edin. "
+            "Rotor yataklarında oynaklık testi yapın (Manuel kontrol veya endoskop). "
+            "Gerekirse alternatörü söküp dengeleyin veya yatak değiştirin."
+        ),
+        amplitude_ratio_threshold=1.5,
+        relevant_locations=["ALT"],
     ),
 
     FaultSignature(
@@ -815,7 +940,7 @@ FREQUENCY_BANDS: List[FrequencyBand] = [
     FrequencyBand("Valf Treni",        100.0,   250.0,
                   "Valf treni ve kam mili aktivitesi"),
     FrequencyBand("Dişli Ağzı Düşük",  250.0,   800.0,
-                  "Düşük dişli ağzı frekansları (yağ pompası 4.13x, vakum pompası 12x)"),
+                  "Düşük dişli ağzı frekansları (yağ pompası 4.13x, alternatör 5.9x)"),
     FrequencyBand("Dişli Ağzı Yüksek", 800.0,  2500.0,
                   "Yüksek dişli ağzı frekansları (dişli kutusu 29x ≈ 800-1900 Hz @ 1700-3900 RPM)"),
     FrequencyBand("Yüksek Frekans",   2500.0, 10000.0,
@@ -833,8 +958,8 @@ ALERT_THRESHOLDS = {
 }
 
 # Her zaman izlenecek orderlar
-MANDATORY_MONITOR_ORDERS = [0.5, 0.59, 1.0, 1.77, 2.0, 4.0, 4.13, 29.0]
+MANDATORY_MONITOR_ORDERS = [0.5, 0.59, 1.0, 1.77, 2.0, 4.0, 4.13, 5.9, 29.0]
 
 # Hassas orderlar — daha düşük eşik uygulanır
-SENSITIVE_ORDERS               = [0.59, 1.77, 4.13, 29.0, 58.0, 87.0]
+SENSITIVE_ORDERS               = [0.59, 1.77, 4.13, 5.9, 28.0, 28.41, 29.0, 29.59, 30.0, 58.0, 87.0]
 SENSITIVE_THRESHOLD_MULTIPLIER = 0.8   # Normal eşiğin %80'i

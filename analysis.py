@@ -71,15 +71,22 @@ class OrderExtractor:
         else:
             return self._extract_from_waterfall(run, orders)
 
+    def _tol_for(self, order: float) -> float:
+        odef = ORDER_DEFINITIONS.get(order)
+        if odef and odef.tolerance_override is not None:
+            return odef.tolerance_override
+        return self._tolerance
+
     def _extract_from_order_tracking(
         self, run: EngineRun, orders: List[float]
     ) -> Dict[float, OrderAmplitude]:
         result: Dict[float, OrderAmplitude] = {}
         for order in orders:
-            # Find closest order in the data
+            tol = self._tol_for(order)
             idx = np.argmin(np.abs(run.orders - order))
-            if abs(run.orders[idx] - order) / max(order, 1e-9) > self._tolerance:
-                logger.debug("Order %.2f not found in order-tracking data (closest: %.2f)", order, run.orders[idx])
+            if abs(run.orders[idx] - order) / max(order, 1e-9) > tol:
+                logger.debug("Order %.2f not found in order-tracking data (closest: %.2f)",
+                             order, run.orders[idx])
                 continue
             amps = run.order_amplitudes[:, idx]
             result[order] = OrderAmplitude(
@@ -96,20 +103,19 @@ class OrderExtractor:
         self, run: EngineRun, orders: List[float]
     ) -> Dict[float, OrderAmplitude]:
         result: Dict[float, OrderAmplitude] = {}
-        shaft_hz = run.rpm_values / 60.0  # (n_slices,)
+        shaft_hz = run.rpm_values / 60.0
 
-        # Compute absolute minimum tolerance: at least 1 frequency bin wide
         if len(run.frequencies) > 1:
             min_bin_hz = float(run.frequencies[1] - run.frequencies[0])
         else:
             min_bin_hz = 1.0
 
         for order in orders:
+            tol = self._tol_for(order)
             order_amps = np.zeros(run.n_slices)
             for i, (shaft_f, row_amps) in enumerate(zip(shaft_hz, run.amplitudes)):
                 target_hz = order * shaft_f
-                rel_tol = target_hz * self._tolerance
-                # Always use at least 1.5 bins to guarantee a hit
+                rel_tol = target_hz * tol
                 abs_tol = max(rel_tol, min_bin_hz * 1.5)
                 mask = np.abs(run.frequencies - target_hz) <= abs_tol
                 if mask.any():
