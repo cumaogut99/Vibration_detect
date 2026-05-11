@@ -363,6 +363,80 @@ class LogPanel(QPlainTextEdit):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  WATERFALL ZOOM CONTROLS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WaterfallControls(QWidget):
+    """Numeric input row for Hz / RPM axis ranges. Emits apply_zoom / reset_zoom."""
+
+    apply_zoom = Signal(dict)   # {hz_min, hz_max, rpm_min, rpm_max} (None for blank)
+    reset_zoom = Signal()
+
+    def __init__(self, parent=None):
+        from PySide6.QtWidgets import QLineEdit
+
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
+
+        def _make_input(placeholder: str) -> QLineEdit:
+            le = QLineEdit()
+            le.setPlaceholderText(placeholder)
+            le.setMaximumWidth(80)
+            le.returnPressed.connect(self._emit_apply)
+            return le
+
+        layout.addWidget(QLabel("Frekans (Hz):"))
+        self._hz_min = _make_input("min")
+        layout.addWidget(self._hz_min)
+        layout.addWidget(QLabel("–"))
+        self._hz_max = _make_input("max")
+        layout.addWidget(self._hz_max)
+
+        layout.addSpacing(20)
+        layout.addWidget(QLabel("RPM:"))
+        self._rpm_min = _make_input("min")
+        layout.addWidget(self._rpm_min)
+        layout.addWidget(QLabel("–"))
+        self._rpm_max = _make_input("max")
+        layout.addWidget(self._rpm_max)
+
+        layout.addSpacing(10)
+        apply_btn = QPushButton("Uygula")
+        apply_btn.clicked.connect(self._emit_apply)
+        layout.addWidget(apply_btn)
+
+        reset_btn = QPushButton("Sıfırla")
+        reset_btn.clicked.connect(self._on_reset)
+        layout.addWidget(reset_btn)
+
+        layout.addStretch()
+
+    def _emit_apply(self) -> None:
+        def parse(text: str):
+            text = text.strip().replace(",", ".")
+            if not text:
+                return None
+            try:
+                return float(text)
+            except ValueError:
+                return None
+
+        self.apply_zoom.emit({
+            "hz_min":  parse(self._hz_min.text()),
+            "hz_max":  parse(self._hz_max.text()),
+            "rpm_min": parse(self._rpm_min.text()),
+            "rpm_max": parse(self._rpm_max.text()),
+        })
+
+    def _on_reset(self) -> None:
+        for le in (self._hz_min, self._hz_max, self._rpm_min, self._rpm_max):
+            le.clear()
+        self.reset_zoom.emit()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  MATPLOTLIB CANVAS (embed matplotlib inside Qt)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -373,14 +447,20 @@ class MatplotlibCanvas(QWidget):
     scrollable=True wraps the canvas in a QScrollArea and gives the canvas its
     natural pixel size (figsize × dpi). Use for charts where compressing to the
     available area produces unreadable subplots (e.g. multi-subplot grids).
+
+    show_toolbar=True adds matplotlib's NavigationToolbar2QT above the canvas
+    (zoom/pan/reset/save/edit-axes).
     """
 
-    def __init__(self, parent=None, scrollable: bool = False):
+    def __init__(self, parent=None, scrollable: bool = False,
+                 show_toolbar: bool = False):
         super().__init__(parent)
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
         self._canvas: Optional[FigureCanvasQTAgg] = None
+        self._toolbar = None
         self._scrollable = scrollable
+        self._show_toolbar = show_toolbar
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -403,8 +483,12 @@ class MatplotlibCanvas(QWidget):
         self._content_layout.addWidget(self._placeholder)
 
     def set_figure(self, fig) -> None:
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 
+        if self._toolbar:
+            self._content_layout.removeWidget(self._toolbar)
+            self._toolbar.deleteLater()
+            self._toolbar = None
         if self._canvas:
             self._content_layout.removeWidget(self._canvas)
             self._canvas.deleteLater()
@@ -422,10 +506,25 @@ class MatplotlibCanvas(QWidget):
             self._canvas.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         else:
             self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        if self._show_toolbar:
+            self._toolbar = NavigationToolbar2QT(self._canvas, self)
+            self._content_layout.addWidget(self._toolbar)
         self._content_layout.addWidget(self._canvas)
         self._canvas.draw()
 
+    def figure(self):
+        return self._canvas.figure if self._canvas else None
+
+    def redraw(self) -> None:
+        if self._canvas:
+            self._canvas.draw_idle()
+
     def clear(self) -> None:
+        if self._toolbar:
+            self._content_layout.removeWidget(self._toolbar)
+            self._toolbar.deleteLater()
+            self._toolbar = None
         if self._canvas:
             self._content_layout.removeWidget(self._canvas)
             self._canvas.deleteLater()

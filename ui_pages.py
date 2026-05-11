@@ -26,7 +26,7 @@ from ui_worker import AnalysisWorker, FleetAnalysisWorker, DemoWorker
 from ui_widgets import (
     SectionTitle, Divider, StatusBadge, HealthScoreDial,
     EngineCard, FilePickerRow, FolderPickerRow,
-    LoadingOverlay, LogPanel, MatplotlibCanvas,
+    LoadingOverlay, LogPanel, MatplotlibCanvas, WaterfallControls,
 )
 
 logger = logging.getLogger(__name__)
@@ -579,11 +579,24 @@ class PageResults(QWidget):
         self._plot_tabs.setObjectName("plotTabs")
         plot_layout.addWidget(self._plot_tabs)
 
-        self._canvas_waterfall = MatplotlibCanvas()
+        self._canvas_waterfall = MatplotlibCanvas(show_toolbar=True)
         self._canvas_orders    = MatplotlibCanvas(scrollable=True)
         self._canvas_card      = MatplotlibCanvas()
 
-        self._plot_tabs.addTab(self._canvas_waterfall, "🌊  Waterfall")
+        # Waterfall tab: numeric Hz/RPM range controls above the canvas+toolbar
+        waterfall_tab = QWidget()
+        wf_layout = QVBoxLayout(waterfall_tab)
+        wf_layout.setContentsMargins(0, 0, 0, 0)
+        wf_layout.setSpacing(0)
+        self._waterfall_controls = WaterfallControls()
+        self._waterfall_controls.apply_zoom.connect(self._apply_waterfall_zoom)
+        self._waterfall_controls.reset_zoom.connect(self._reset_waterfall_zoom)
+        wf_layout.addWidget(self._waterfall_controls)
+        wf_layout.addWidget(self._canvas_waterfall, stretch=1)
+        self._wf_initial_xlim = None
+        self._wf_initial_ylim = None
+
+        self._plot_tabs.addTab(waterfall_tab,          "🌊  Waterfall")
         self._plot_tabs.addTab(self._canvas_orders,    "📈  Order Karşılaştırma")
         self._plot_tabs.addTab(self._canvas_card,      "📋  Tanı Kartı")
 
@@ -644,6 +657,9 @@ class PageResults(QWidget):
         try:
             fig_wf  = plot_waterfall(run)
             self._canvas_waterfall.set_figure(fig_wf)
+            if fig_wf.axes:
+                self._wf_initial_xlim = fig_wf.axes[0].get_xlim()
+                self._wf_initial_ylim = fig_wf.axes[0].get_ylim()
         except Exception as e:
             logger.warning("Waterfall plot error: %s", e)
 
@@ -668,6 +684,36 @@ class PageResults(QWidget):
         except Exception as e:
             logger.warning("Card error: %s", e)
         self._diag_widget.set_report(report)
+
+    def _apply_waterfall_zoom(self, ranges: dict) -> None:
+        fig = self._canvas_waterfall.figure()
+        if not fig or not fig.axes:
+            return
+        ax = fig.axes[0]
+        if ranges["hz_min"] is not None or ranges["hz_max"] is not None:
+            x0, x1 = ax.get_xlim()
+            ax.set_xlim(
+                ranges["hz_min"] if ranges["hz_min"] is not None else x0,
+                ranges["hz_max"] if ranges["hz_max"] is not None else x1,
+            )
+        if ranges["rpm_min"] is not None or ranges["rpm_max"] is not None:
+            y0, y1 = ax.get_ylim()
+            ax.set_ylim(
+                ranges["rpm_min"] if ranges["rpm_min"] is not None else y0,
+                ranges["rpm_max"] if ranges["rpm_max"] is not None else y1,
+            )
+        self._canvas_waterfall.redraw()
+
+    def _reset_waterfall_zoom(self) -> None:
+        if self._wf_initial_xlim is None:
+            return
+        fig = self._canvas_waterfall.figure()
+        if not fig or not fig.axes:
+            return
+        ax = fig.axes[0]
+        ax.set_xlim(self._wf_initial_xlim)
+        ax.set_ylim(self._wf_initial_ylim)
+        self._canvas_waterfall.redraw()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
