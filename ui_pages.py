@@ -26,7 +26,7 @@ from ui_worker import AnalysisWorker, FleetAnalysisWorker, DemoWorker
 from ui_widgets import (
     SectionTitle, Divider, StatusBadge, HealthScoreDial,
     EngineCard, FilePickerRow, FolderPickerRow,
-    LoadingOverlay, LogPanel, MatplotlibCanvas,
+    LoadingOverlay, LogPanel, MatplotlibCanvas, WaterfallControlBar,
 )
 
 logger = logging.getLogger(__name__)
@@ -579,13 +579,27 @@ class PageResults(QWidget):
         self._plot_tabs.setObjectName("plotTabs")
         plot_layout.addWidget(self._plot_tabs)
 
-        self._canvas_waterfall = MatplotlibCanvas()
-        self._canvas_orders    = MatplotlibCanvas()
-        self._canvas_card      = MatplotlibCanvas()
+        # ── Waterfall tab ────────────────────────────────────────────────
+        wf_tab = QWidget()
+        wf_layout = QVBoxLayout(wf_tab)
+        wf_layout.setContentsMargins(0, 0, 0, 0)
+        wf_layout.setSpacing(0)
+        self._wf_controls = WaterfallControlBar()
+        self._wf_controls.refresh_requested.connect(self._on_wf_refresh)
+        wf_layout.addWidget(self._wf_controls)
+        self._canvas_waterfall = MatplotlibCanvas(show_toolbar=True)
+        wf_layout.addWidget(self._canvas_waterfall, stretch=1)
 
-        self._plot_tabs.addTab(self._canvas_waterfall, "🌊  Waterfall")
-        self._plot_tabs.addTab(self._canvas_orders,    "📈  Order Karşılaştırma")
-        self._plot_tabs.addTab(self._canvas_card,      "📋  Tanı Kartı")
+        # Order comparison tab — scrollable for many-subplot figures
+        self._canvas_orders = MatplotlibCanvas(scrollable=True)
+        self._canvas_card   = MatplotlibCanvas()
+
+        self._plot_tabs.addTab(wf_tab,                  "🌊  Waterfall")
+        self._plot_tabs.addTab(self._canvas_orders,     "📈  Order Karşılaştırma")
+        self._plot_tabs.addTab(self._canvas_card,       "📋  Tanı Kartı")
+
+        # Cache the current run so the waterfall can be re-rendered with new bounds
+        self._current_run = None
 
         splitter.addWidget(plot_widget)
 
@@ -636,13 +650,14 @@ class PageResults(QWidget):
         self._render_plots(report, run, ref_run, order_data, ref_order_data)
 
     def _render_plots(self, report, run, ref_run, order_data, ref_order_data):
-        import matplotlib
-        matplotlib.use("Agg")
-
         from plots import plot_waterfall, plot_order_comparison, plot_diagnostic_card
 
+        self._current_run = run
+        if run is not None:
+            self._wf_controls.set_rpm_range(*run.rpm_range)
+
         try:
-            fig_wf  = plot_waterfall(run)
+            fig_wf = plot_waterfall(run)
             self._canvas_waterfall.set_figure(fig_wf)
         except Exception as e:
             logger.warning("Waterfall plot error: %s", e)
@@ -658,6 +673,26 @@ class PageResults(QWidget):
             self._canvas_card.set_figure(fig_card)
         except Exception as e:
             logger.warning("Card plot error: %s", e)
+
+    def _on_wf_refresh(self, f_min, f_max, r_min, r_max):
+        """User changed Hz/RPM bounds — re-render waterfall in place."""
+        if self._current_run is None:
+            return
+        from plots import plot_waterfall
+        kwargs = {}
+        if f_min is not None:
+            kwargs["freq_min"] = f_min
+        if f_max is not None:
+            kwargs["freq_max"] = f_max
+        if r_min is not None:
+            kwargs["rpm_min"] = r_min
+        if r_max is not None:
+            kwargs["rpm_max"] = r_max
+        try:
+            fig_wf = plot_waterfall(self._current_run, **kwargs)
+            self._canvas_waterfall.set_figure(fig_wf)
+        except Exception as e:
+            logger.warning("Waterfall refresh error: %s", e)
 
     def _render_plots_for_report(self, report):
         """For fleet: render only the diagnostic card (no raw run data)."""
