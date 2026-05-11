@@ -1,0 +1,5 @@
+PySide6>=6.5
+matplotlib>=3.7
+numpy>=1.24
+scipy>=1.10
+duckdb>=0.10
