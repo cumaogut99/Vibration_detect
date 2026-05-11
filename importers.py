@@ -85,26 +85,131 @@ class BaseImporter(abc.ABC):
 #  DEWESOFT ORDER TRACKING CSV
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+#  ORTAK YARDIMCI: dinamik header satiri tespiti
+# ---------------------------------------------------------------------------
+
+# Header'i ararken kac satiri tarayacagiz.
+_HEADER_SCAN_DEPTH = 12
+
+# Eksen-baglami iceren turkce + ingilizce anahtar kelimeler
+_RPM_KEYS  = ("speed", "rpm", "devir", "hız", "hiz")
+_ORDER_KEYS = ("order", "orto", "order tracking")
+_FREQ_KEYS  = ("freq", "hz", "frequency")
+
+
+def _find_dewesoft_header(
+    rows: List[List[str]],
+    require: str,   # "order" or "freq"
+) -> Optional[int]:
+    """
+    DEWESoft CSV'sinde sutun-basligi satirini (orderlar / frekanslar) bulur.
+    Aranan kriterler:
+      1. Ilk hucre RPM/speed/hiz/devir ile baslar veya iceriri
+      2. ``require`` 'order' ise hucrede 'order' / 'orto' gecmeli ve 'freq' gecmemeli;
+         'freq' ise 'freq' / 'hz' / 'frequency' gecmeli.
+      3. Hemen sonraki satirin ilk hucresi sayisal (gercek bir RPM).
+    """
+    keys = _ORDER_KEYS if require == "order" else _FREQ_KEYS
+    anti = _FREQ_KEYS  if require == "order" else ()  # OT'de 'freq' olmasin
+
+    for i, row in enumerate(rows[:_HEADER_SCAN_DEPTH]):
+        if not row:
+            continue
+        first = (row[0] or "").strip().lower()
+        if not first:
+            continue
+        if not any(k in first for k in _RPM_KEYS):
+            continue
+        if not any(k in first for k in keys):
+            continue
+        if anti and any(k in first for k in anti):
+            continue
+        # Bir sonraki satirin ilk hucresi sayisal mi? (gercek RPM olmali)
+        if i + 1 >= len(rows) or not rows[i + 1]:
+            continue
+        try:
+            float((rows[i + 1][0] or "").strip().replace(",", "."))
+        except (ValueError, AttributeError):
+            continue
+        return i
+    return None
+
+
+def _parse_axis_values(header_row: List[str]) -> List[float]:
+    """Header satirindaki [1:] hucrelerini float listesine cevirir."""
+    out: List[float] = []
+    for cell in header_row[1:]:
+        c = (cell or "").strip().replace(",", ".")
+        if not c:
+            continue
+        try:
+            out.append(float(c))
+        except ValueError:
+            # Bilinmeyen hucre — atla
+            continue
+    return out
+
+
+def _parse_data_rows(
+    data_rows: List[List[str]], n_axis: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Her veri satirindan ilk hucre = RPM, kalanlar = ``n_axis`` genlik."""
+    rpm_list: List[float] = []
+    amp_rows: List[List[float]] = []
+
+    for row in data_rows:
+        if not row or not (row[0] or "").strip():
+            continue
+        try:
+            rpm = float((row[0] or "").strip().replace(",", "."))
+        except ValueError:
+            continue
+        amps: List[float] = []
+        for cell in row[1: n_axis + 1]:
+            c = (cell or "").strip().replace(",", ".")
+            try:
+                amps.append(float(c) if c else 0.0)
+            except ValueError:
+                amps.append(0.0)
+        while len(amps) < n_axis:
+            amps.append(0.0)
+        rpm_list.append(rpm)
+        amp_rows.append(amps[:n_axis])
+
+    return (
+        np.array(rpm_list, dtype=np.float64),
+        np.array(amp_rows,  dtype=np.float64),
+    )
+
+
+# ---------------------------------------------------------------------------
+#  DEWESOFT ORDER TRACKING CSV
+# ---------------------------------------------------------------------------
+
 class DewesoftOrderTrackingImporter(BaseImporter):
     """
-    Birincil format. Satir 3'te "Speed/RPM" VE "Order" kelimesi olmalı.
+    Header satirini ilk 12 satir icinde dinamik olarak bulur. Sart:
+    bir satirin ilk hucresinde RPM/speed/hiz/devir VE order/orto gecmeli,
+    'freq' GECMEMELI; ayrica hemen altindaki satirin ilk hucresi
+    sayisal (gercek RPM) olmali.
     """
+
+    def _rows(self, path: Path) -> List[List[str]]:
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        # ',' veya ';' delimiter'inini tahmin et
+        sample = text[:4096]
+        delim = ";" if sample.count(";") > sample.count(",") else ","
+        return list(csv.reader(io.StringIO(text), delimiter=delim))
 
     def can_handle(self, path: Path) -> bool:
         if path.suffix.lower() != ".csv":
             return False
         try:
-            with path.open(encoding="utf-8-sig", errors="replace") as f:
-                for _ in range(2):
-                    f.readline()
-                row3 = f.readline().lower()
-            return (
-                any(k in row3 for k in ("speed", "rpm", "devir")) and
-                "order" in row3 and
-                "freq" not in row3
-            )
+            rows = self._rows(path)
         except Exception:
             return False
+        return _find_dewesoft_header(rows, require="order") is not None
 
     def load(self, path: Path, engine_id: str, run_id: str,
              sensor_location: str, axis: str = "X",
@@ -112,70 +217,43 @@ class DewesoftOrderTrackingImporter(BaseImporter):
              metadata: Optional[Dict] = None) -> EngineRun:
 
         logger.info("DEWESoft OT yukleniyor: %s", path.name)
-        rows = list(csv.reader(
-            io.StringIO(path.read_text(encoding="utf-8-sig", errors="replace"))
-        ))
+        rows = self._rows(path)
 
-        if len(rows) < 4:
-            raise ValueError(f"Yetersiz satir ({len(rows)}): {path.name}")
+        hdr_idx = _find_dewesoft_header(rows, require="order")
+        if hdr_idx is None:
+            raise ValueError(f"Order header satiri bulunamadi: {path.name}")
 
-        channel_header = rows[0][0].strip() if rows[0] else ""
-        unit_str       = rows[1][0].strip() if len(rows) > 1 else ""
-
-        # Satir 3: order degerleri
-        orders: List[float] = []
-        for cell in rows[2][1:]:
-            c = cell.strip()
-            if not c:
-                continue
-            try:
-                orders.append(float(c))
-            except ValueError:
-                logger.warning("Order baslik parse hatasi: '%s'", c)
-
+        orders = _parse_axis_values(rows[hdr_idx])
         if not orders:
             raise ValueError(f"Order sutunlari bulunamadi: {path.name}")
-
         orders_arr = np.array(orders, dtype=np.float64)
         n_orders   = len(orders_arr)
 
-        rpm_list: List[float] = []
-        amp_rows: List[List[float]] = []
-
-        for row in rows[3:]:
-            if not row or not row[0].strip():
-                continue
-            try:
-                rpm = float(row[0].strip())
-            except ValueError:
-                continue
-
-            amps = []
-            for cell in row[1: n_orders + 1]:
-                try:
-                    amps.append(float(cell.strip()) if cell.strip() else 0.0)
-                except ValueError:
-                    amps.append(0.0)
-            while len(amps) < n_orders:
-                amps.append(0.0)
-            rpm_list.append(rpm)
-            amp_rows.append(amps[:n_orders])
-
-        if not rpm_list:
+        rpm_values, order_amplitudes = _parse_data_rows(
+            rows[hdr_idx + 1:], n_orders,
+        )
+        if rpm_values.size == 0:
             raise ValueError(f"Veri satiri yok: {path.name}")
 
-        rpm_values       = np.array(rpm_list, dtype=np.float64)
-        order_amplitudes = np.array(amp_rows,  dtype=np.float64)
+        # Header'in ustundeki satirlardan kanal adi / birim cikar (varsa)
+        channel_header = ""
+        unit_str       = ""
+        if hdr_idx >= 1 and rows[0]:
+            channel_header = (rows[0][0] or "").strip()
+        if hdr_idx >= 2 and rows[1]:
+            unit_str = (rows[1][0] or "").strip()
 
         mean_shaft_hz = float(rpm_values.mean()) / 60.0
         frequencies   = orders_arr * mean_shaft_hz
 
         meta = dict(metadata or {})
         meta.update({"channel_header": channel_header, "unit": unit_str,
-                     "source_format": "dewesoft_order_tracking", "axis": axis})
+                     "source_format": "dewesoft_order_tracking",
+                     "header_row": hdr_idx, "axis": axis})
 
-        logger.info("  -> %d RPM x %d order | RPM: %.0f-%.0f",
-                    len(rpm_list), n_orders, rpm_values.min(), rpm_values.max())
+        logger.info("  -> %d RPM x %d order | RPM: %.0f-%.0f | header satir %d",
+                    rpm_values.size, n_orders,
+                    rpm_values.min(), rpm_values.max(), hdr_idx)
 
         return EngineRun(
             engine_id=engine_id, run_id=run_id,
@@ -193,21 +271,28 @@ class DewesoftOrderTrackingImporter(BaseImporter):
 # ---------------------------------------------------------------------------
 
 class DewesoftWaterfallImporter(BaseImporter):
+    """
+    Header satirini ilk 12 satir icinde dinamik olarak bulur. Sart:
+    bir satirin ilk hucresinde RPM/speed/hiz/devir VE freq/hz/frequency
+    gecmeli; ayrica hemen altindaki satirin ilk hucresi sayisal (gercek
+    RPM) olmali. Hem 3-satir header'li tipik DEWESoft export'unu, hem
+    de tek-satir header'li sade format'i destekler.
+    """
+
+    def _rows(self, path: Path) -> List[List[str]]:
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        sample = text[:4096]
+        delim = ";" if sample.count(";") > sample.count(",") else ","
+        return list(csv.reader(io.StringIO(text), delimiter=delim))
 
     def can_handle(self, path: Path) -> bool:
         if path.suffix.lower() != ".csv":
             return False
         try:
-            with path.open(encoding="utf-8-sig", errors="replace") as f:
-                for _ in range(2):
-                    f.readline()
-                row3 = f.readline().lower()
-            return (
-                any(k in row3 for k in ("speed", "rpm", "devir")) and
-                any(k in row3 for k in ("freq", "hz", "frequency"))
-            )
+            rows = self._rows(path)
         except Exception:
             return False
+        return _find_dewesoft_header(rows, require="freq") is not None
 
     def load(self, path: Path, engine_id: str, run_id: str,
              sensor_location: str, axis: str = "X",
@@ -215,65 +300,39 @@ class DewesoftWaterfallImporter(BaseImporter):
              metadata: Optional[Dict] = None) -> EngineRun:
 
         logger.info("DEWESoft FFT Waterfall yukleniyor: %s", path.name)
-        rows = list(csv.reader(
-            io.StringIO(path.read_text(encoding="utf-8-sig", errors="replace"))
-        ))
+        rows = self._rows(path)
 
-        if len(rows) < 4:
-            raise ValueError(f"Yetersiz satir: {path.name}")
+        hdr_idx = _find_dewesoft_header(rows, require="freq")
+        if hdr_idx is None:
+            raise ValueError(f"Frekans header satiri bulunamadi: {path.name}")
 
-        channel_header = rows[0][0].strip() if rows[0] else ""
-        unit_str       = rows[1][0].strip() if len(rows) > 1 else ""
-
-        freq_values: List[float] = []
-        for cell in rows[2][1:]:
-            c = cell.strip()
-            if not c:
-                continue
-            try:
-                freq_values.append(float(c))
-            except ValueError:
-                pass
-
+        freq_values = _parse_axis_values(rows[hdr_idx])
         if not freq_values:
             raise ValueError(f"Frekans sutunlari bulunamadi: {path.name}")
-
         frequencies = np.array(freq_values, dtype=np.float64)
         n_freqs     = len(frequencies)
 
-        rpm_list: List[float] = []
-        amp_rows: List[List[float]] = []
-
-        for row in rows[3:]:
-            if not row or not row[0].strip():
-                continue
-            try:
-                rpm = float(row[0].strip())
-            except ValueError:
-                continue
-            amps = []
-            for cell in row[1: n_freqs + 1]:
-                try:
-                    amps.append(float(cell.strip()) if cell.strip() else 0.0)
-                except ValueError:
-                    amps.append(0.0)
-            while len(amps) < n_freqs:
-                amps.append(0.0)
-            rpm_list.append(rpm)
-            amp_rows.append(amps[:n_freqs])
-
-        if not rpm_list:
+        rpm_values, amplitudes = _parse_data_rows(
+            rows[hdr_idx + 1:], n_freqs,
+        )
+        if rpm_values.size == 0:
             raise ValueError(f"Veri satiri yok: {path.name}")
 
-        rpm_values = np.array(rpm_list, dtype=np.float64)
-        amplitudes = np.array(amp_rows,  dtype=np.float64)
+        channel_header = ""
+        unit_str       = ""
+        if hdr_idx >= 1 and rows[0]:
+            channel_header = (rows[0][0] or "").strip()
+        if hdr_idx >= 2 and rows[1]:
+            unit_str = (rows[1][0] or "").strip()
 
         meta = dict(metadata or {})
         meta.update({"channel_header": channel_header, "unit": unit_str,
-                     "source_format": "dewesoft_fft_waterfall", "axis": axis})
+                     "source_format": "dewesoft_fft_waterfall",
+                     "header_row": hdr_idx, "axis": axis})
 
-        logger.info("  -> %d RPM x %d frekans | RPM: %.0f-%.0f",
-                    len(rpm_list), n_freqs, rpm_values.min(), rpm_values.max())
+        logger.info("  -> %d RPM x %d frekans | RPM: %.0f-%.0f | header satir %d",
+                    rpm_values.size, n_freqs,
+                    rpm_values.min(), rpm_values.max(), hdr_idx)
 
         return EngineRun(
             engine_id=engine_id, run_id=run_id,
