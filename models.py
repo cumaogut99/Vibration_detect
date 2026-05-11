@@ -93,6 +93,11 @@ class DiagnosticReport:
     reference_engine_id: Optional[str]
     summary: str
     recommendations: List[str]
+    # Fleet/demo akışında her motor için ham veriyi taşır:
+    # {"meas_run", "ref_run", "order_data", "ref_order_data"}.
+    # Sonuçlar sayfası bu sözlük doluysa waterfall + order grafiklerini
+    # de tam çizer; yoksa sadece tanı kartını render eder.
+    bundle: Dict = field(default_factory=dict)
 
 
 @dataclass

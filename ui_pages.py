@@ -1175,21 +1175,37 @@ class PageResults(QWidget):
         self._render_report(report, run, ref_run, order_data, ref_order_data)
 
     def show_fleet(self, reports: Dict, ref_run):
-        """Display fleet results — populate engine selector."""
+        """Display fleet results — populate engine selector and render the first."""
         self._reports = reports
         self._ref_run = ref_run
+        self._engine_combo.blockSignals(True)
         self._engine_combo.clear()
         for eid in sorted(reports.keys()):
             self._engine_combo.addItem(eid)
+        self._engine_combo.blockSignals(False)
+        # Ilk motoru otomatik sec ki kullanici "her sey bos" gormesin.
+        if self._engine_combo.count():
+            self._on_engine_selected(self._engine_combo.itemText(0))
 
     def _on_engine_selected(self, eid: str):
         if not eid or eid not in self._reports:
             return
         report = self._reports[eid]
-        # We need to rebuild run/order_data for fleet engines
-        # For now we render diagnosis panel and placeholder plots
         self._diag_widget.set_report(report)
-        self._render_plots_for_report(report)
+
+        bundle = getattr(report, "bundle", None) or {}
+        meas_run = bundle.get("meas_run")
+        if meas_run is not None:
+            self._render_plots(
+                report,
+                meas_run,
+                bundle.get("ref_run"),
+                bundle.get("order_data") or {},
+                bundle.get("ref_order_data") or {},
+            )
+        else:
+            # Eski/bundle'siz akis: sadece tani karti cizilebilir.
+            self._render_plots_for_report(report)
 
     def _render_report(self, report, run, ref_run, order_data, ref_order_data):
         """Full render with actual run data."""

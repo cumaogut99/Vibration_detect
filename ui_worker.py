@@ -87,7 +87,10 @@ class DemoWorker(QThread):
                 "ENG-045 (Saglikli)":                {},
             }
 
-            analyzer = build_default_analyzer()
+            analyzer  = build_default_analyzer()
+            extractor = OrderExtractor()
+            orders    = list(ORDER_DEFINITIONS.keys())
+            ref_order_data = extractor.extract(ref_run, orders)
             reports: dict = {}
 
             for i, (eid, faults) in enumerate(engines.items()):
@@ -101,6 +104,13 @@ class DemoWorker(QThread):
                     amplitudes=amps,
                 )
                 report = analyzer.analyze(run, ref_run)
+                # PageResults bundle for waterfall + order tabs
+                report.bundle = {
+                    "meas_run": run,
+                    "ref_run":  ref_run,
+                    "order_data":     extractor.extract(run, orders),
+                    "ref_order_data": ref_order_data,
+                }
                 reports[eid] = report
                 self.engine_done.emit(eid, report.overall_health_score)
 
@@ -267,6 +277,14 @@ class DbFleetAnalysisWorker(QThread):
 
                     try:
                         report = analyzer.analyze(meas_run, cur_ref)
+                        # Attach raw arrays so PageResults can draw the waterfall
+                        # + order-comparison tabs when this engine is selected.
+                        report.bundle = {
+                            "meas_run": meas_run,
+                            "ref_run":  cur_ref,
+                            "order_data":     extractor.extract(meas_run, orders),
+                            "ref_order_data": extractor.extract(cur_ref,  orders),
+                        }
                         reports[meas_run.engine_id] = report
                         ref_run = cur_ref  # PageResults için en son kullandığımız ref
                         self.engine_done.emit(meas_run.engine_id, report.overall_health_score)
