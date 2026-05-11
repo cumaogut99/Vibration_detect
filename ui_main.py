@@ -20,7 +20,10 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QFrame, QScrollArea,
     QSizePolicy, QStatusBar, QFileDialog, QMessageBox,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QSize
+from PySide6.QtCore import (
+    Qt, QThread, Signal, QObject, QSize,
+    qInstallMessageHandler, QtMsgType,
+)
 from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QPixmap
 
 # ── Backend imports ────────────────────────────────────────────────────────
@@ -51,8 +54,25 @@ logger = logging.getLogger(__name__)
 #  APPLICATION ENTRY
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _qt_message_filter(mode, context, message: str) -> None:
+    """
+    Qt stylesheet engine, font-size:px CSS kuralları için her widget'a yayılırken
+    ``QFont::setPointSize: Point size <= 0`` benign uyarısı basıyor. Bunları
+    susturup gerçek hataları (Critical / Fatal) konsola bırakıyoruz.
+    """
+    if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        print(f"[Qt {mode.name}] {message}", file=sys.stderr)
+        return
+    if "Point size <= 0" in message:
+        return
+    if mode == QtMsgType.QtWarningMsg:
+        print(f"[Qt WARN] {message}", file=sys.stderr)
+
+
 def main() -> None:
     """GUI uygulamasını başlatır. main.py'den veya doğrudan çağrılabilir."""
+    qInstallMessageHandler(_qt_message_filter)
+
     # High-DPI
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

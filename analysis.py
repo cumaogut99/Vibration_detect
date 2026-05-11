@@ -182,10 +182,11 @@ class OrderAmplitudeAnomalyDetector(BaseAnomalyDetector):
                 ref.rpm_values, ref.amplitudes, measured.rpm_values
             )
 
-            ratio = np.where(
-                ref_amps_interp > 1e-12,
-                measured.amplitudes / ref_amps_interp,
-                1.0,
+            mask = ref_amps_interp > 1e-12
+            ratio = np.ones_like(measured.amplitudes)
+            np.divide(
+                measured.amplitudes, ref_amps_interp,
+                out=ratio, where=mask,
             )
 
             # Find RPM points where ratio exceeds threshold
@@ -442,22 +443,27 @@ class VibrationAnalyzer:
         order_data = self._extractor.extract(run, orders_to_analyze)
         ref_order_data = self._extractor.extract(reference, orders_to_analyze)
 
-        # Attach reference amplitudes to order data for downstream use
+        # Attach reference amplitudes + amplitude ratios to each OrderAmplitude.
+        # The ratio is only sensible where the reference is non-zero; np.divide
+        # with where= avoids the divide-by-zero RuntimeWarning.
         for order, oa in order_data.items():
-            if order in ref_order_data:
-                ref = ref_order_data[order]
-                f = interp1d(
-                    ref.rpm_values, ref.amplitudes,
-                    kind="linear", bounds_error=False,
-                    fill_value=(ref.amplitudes[0] if len(ref.amplitudes) else 0.0,
-                                ref.amplitudes[-1] if len(ref.amplitudes) else 0.0),
-                )
-                oa.reference_amplitudes = f(oa.rpm_values)
-        oa.amplitude_ratio = np.where(
-                    np.abs(oa.reference_amplitudes) > 1e-10,
-                    oa.amplitudes / oa.reference_amplitudes,
-                    1.0,
-                )
+            if order not in ref_order_data:
+                continue
+            ref = ref_order_data[order]
+            interp = interp1d(
+                ref.rpm_values, ref.amplitudes,
+                kind="linear", bounds_error=False,
+                fill_value=(ref.amplitudes[0] if len(ref.amplitudes) else 0.0,
+                            ref.amplitudes[-1] if len(ref.amplitudes) else 0.0),
+            )
+            oa.reference_amplitudes = interp(oa.rpm_values)
+            mask = np.abs(oa.reference_amplitudes) > 1e-10
+            ratio = np.ones_like(oa.amplitudes)
+            np.divide(
+                oa.amplitudes, oa.reference_amplitudes,
+                out=ratio, where=mask,
+            )
+            oa.amplitude_ratio = ratio
 
         all_anomalies: List[AnomalyFlag] = []
         for detector in self._detectors:
