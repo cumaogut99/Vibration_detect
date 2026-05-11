@@ -322,6 +322,117 @@ class DbAnalysisWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
+#  FILO ANALİZİ — DB tabanlı
+# ---------------------------------------------------------------------------
+
+class DbFleetAnalysisWorker(QThread):
+    """
+    Bir liste DB run id'sini (olcum runlari) alir, her biri icin kanal-bazli
+    referans bulup analiz calistirir.
+
+    Referans secim stratejisi:
+      1. Once aynı motor + kanal + is_reference=TRUE.
+      2. Yoksa herhangi bir motor + aynı kanal + is_reference=TRUE.
+      3. O da yoksa run skip edilir ve "no reference" mesaji loglanir.
+
+    Sinyaller:
+      progress(str)
+      engine_done(engine_id, score)
+      finished(reports: dict[str, DiagnosticReport], ref_run: Optional[EngineRun])
+      error(str)
+    """
+
+    progress     = Signal(str)
+    engine_done  = Signal(str, float)
+    finished     = Signal(object, object)
+    error        = Signal(str)
+
+    def __init__(
+        self,
+        meas_run_ids: List[int],
+        db_path: Optional[Path] = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._meas_ids = [int(x) for x in meas_run_ids]
+        self._db_path  = db_path
+
+    def _resolve_reference(self, store: "DataStore", meas: EngineRun) -> Optional[int]:
+        # Tier 1: aynı motorda referans
+        same = store.list_runs(
+            engine_id=meas.engine_id,
+            sensor_location=meas.sensor_location,
+            axis=meas.axis,
+            is_reference=True,
+        )
+        if same:
+            return same[0].id
+        # Tier 2: herhangi bir motorda aynı kanalda referans
+        glob = store.list_runs(
+            sensor_location=meas.sensor_location,
+            axis=meas.axis,
+            is_reference=True,
+        )
+        if glob:
+            return glob[0].id
+        return None
+
+    def run(self):
+        try:
+            analyzer = build_default_analyzer()
+            extractor = OrderExtractor()
+            orders    = list(ORDER_DEFINITIONS.keys())
+
+            reports: Dict[str, Any] = {}
+            ref_run: Optional[EngineRun] = None
+
+            with DataStore(db_path=self._db_path) as store:
+                total = len(self._meas_ids)
+                for i, meas_id in enumerate(self._meas_ids, start=1):
+                    try:
+                        meas_run = store.get_run(meas_id)
+                    except Exception as exc:
+                        self.progress.emit(f"[{i}/{total}]  id={meas_id} yuklenemedi: {exc}")
+                        continue
+
+                    self.progress.emit(
+                        f"[{i}/{total}]  {meas_run.engine_id} "
+                        f"({meas_run.sensor_location}/{meas_run.axis}) analiz ediliyor..."
+                    )
+
+                    ref_id = self._resolve_reference(store, meas_run)
+                    if ref_id is None:
+                        self.progress.emit(
+                            f"  Atlandi [{meas_run.engine_id}]: "
+                            f"{meas_run.sensor_location}/{meas_run.axis} icin referans bulunamadi."
+                        )
+                        continue
+
+                    try:
+                        cur_ref = store.get_run(ref_id)
+                        cur_ref.is_reference = True
+                    except Exception as exc:
+                        self.progress.emit(f"  Atlandi: referans yuklenemedi ({exc})")
+                        continue
+
+                    try:
+                        report = analyzer.analyze(meas_run, cur_ref)
+                        reports[meas_run.engine_id] = report
+                        ref_run = cur_ref  # PageResults için en son kullandığımız ref
+                        self.engine_done.emit(meas_run.engine_id, report.overall_health_score)
+                    except Exception as exc:
+                        logger.warning("Analiz hatasi (%s): %s", meas_run.engine_id, exc)
+                        self.progress.emit(f"  Atlandi [{meas_run.engine_id}]: {exc}")
+
+            self.progress.emit(f"Tamamlandi. {len(reports)}/{len(self._meas_ids)} motor analiz edildi.")
+            self.finished.emit(reports, ref_run)
+
+        except Exception as exc:
+            logger.error("DbFleetAnalysisWorker hatasi: %s", exc)
+            self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")
+
+
+# ---------------------------------------------------------------------------
 #  DATA INGEST  (CSV -> DuckDB)
 # ---------------------------------------------------------------------------
 

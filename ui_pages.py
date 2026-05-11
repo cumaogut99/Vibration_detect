@@ -26,7 +26,7 @@ from PySide6.QtGui import QColor, QFont
 
 from ui_worker import (
     AnalysisWorker, FleetAnalysisWorker, DemoWorker, DataIngestWorker,
-    DbAnalysisWorker,
+    DbAnalysisWorker, DbFleetAnalysisWorker,
 )
 from ui_widgets import (
     SectionTitle, Divider, StatusBadge, HealthScoreDial,
@@ -889,7 +889,243 @@ class PageSingleAnalysis(QWidget):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  PAGE: FLEET ANALYSIS
+#  PAGE: DB-BASED FLEET ANALYSIS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PageDbFleetAnalysis(QWidget):
+    """
+    DuckDB tabanlı filo analizi: tüm run'ları tabloda gösterir, lokasyon /
+    eksen / referans filtreleri uygular, çoklu seçimle analiz başlatır.
+
+    Her ölçüm run'ı için kanal-bazlı (lokasyon+eksen) otomatik referans
+    seçilir — önce aynı motorda, yoksa herhangi bir motorda is_reference
+    işaretli olan.
+
+    ``runs_changed`` slot'u Veri Yükle sayfasından çağrılır.
+    """
+
+    analysis_done = Signal(object, object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("pageContent")
+        self._worker: Optional[DbFleetAnalysisWorker] = None
+        self._store: Optional[DataStore] = None
+        self._all_rows: list = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(20)
+
+        outer.addWidget(_page_header(
+            "🚁  Filo Analizi",
+            "Veritabanındaki run'lar arasından seçim yapın; her ölçüm için "
+            "kanal-bazlı uygun referans otomatik bulunur.",
+        ))
+        outer.addWidget(Divider())
+
+        # ── Filtreler ─────────────────────────────────────────────────────
+        filt_row = QHBoxLayout()
+        filt_row.setSpacing(8)
+
+        from engine_config import LOCATION_CODES
+        self._loc_filter = QComboBox()
+        self._loc_filter.addItem("Tümü", None)
+        for code in LOCATION_CODES:
+            self._loc_filter.addItem(code, code)
+        self._loc_filter.currentIndexChanged.connect(self._apply_filters)
+        filt_row.addWidget(self._lbl("Lokasyon:"))
+        filt_row.addWidget(self._loc_filter)
+
+        self._axis_filter = QComboBox()
+        self._axis_filter.addItem("Tümü", None)
+        for ax in ("X", "Y", "Z"):
+            self._axis_filter.addItem(ax, ax)
+        self._axis_filter.currentIndexChanged.connect(self._apply_filters)
+        filt_row.addWidget(self._lbl("Eksen:"))
+        filt_row.addWidget(self._axis_filter)
+
+        self._hide_refs = QCheckBox("Referansları gizle")
+        self._hide_refs.toggled.connect(self._apply_filters)
+        filt_row.addWidget(self._hide_refs)
+
+        filt_row.addStretch()
+
+        refresh_btn = QPushButton("⟳  Tazele")
+        refresh_btn.setObjectName("btnBrowse")
+        refresh_btn.clicked.connect(self._refresh_all)
+        filt_row.addWidget(refresh_btn)
+
+        outer.addLayout(filt_row)
+
+        # ── Run tablosu (çoklu seçim) ────────────────────────────────────
+        runs_card, runs_body = _card("📋  Veritabanındaki Run'lar")
+        self._runs_table = _make_table(
+            ["ID", "Motor", "Lokasyon", "Eksen", "Run", "Tarih", "Ref", "RPM"]
+        )
+        self._runs_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._runs_table.setSelectionMode(QTableWidget.ExtendedSelection)
+        runs_body.addWidget(self._runs_table)
+
+        action_row = QHBoxLayout()
+        self._run_btn = QPushButton("▶  Seçileni Analiz Et")
+        self._run_btn.setObjectName("btnPrimary")
+        self._run_btn.setFixedHeight(40)
+        self._run_btn.clicked.connect(self._run_fleet)
+        action_row.addWidget(self._run_btn)
+        self._sel_count = QLabel("0 satır seçili")
+        self._sel_count.setObjectName("fieldLabel")
+        action_row.addWidget(self._sel_count)
+        action_row.addStretch()
+        runs_body.addLayout(action_row)
+
+        self._runs_table.itemSelectionChanged.connect(self._update_sel_count)
+
+        outer.addWidget(runs_card, stretch=2)
+
+        # ── Sonuç ve log paneli ─────────────────────────────────────────
+        cols = QHBoxLayout()
+        cols.setSpacing(16)
+        outer.addLayout(cols, stretch=1)
+
+        score_card, score_body = _card("Motor Skorları")
+        self._score_table = _make_table(["Motor ID", "Skor", "Durum"])
+        score_body.addWidget(self._score_table)
+        cols.addWidget(score_card, stretch=1)
+
+        log_card, log_body = _card("📋  İlerleme")
+        self._log = LogPanel()
+        log_body.addWidget(self._log)
+        cols.addWidget(log_card, stretch=1)
+
+        self._overlay = LoadingOverlay(self)
+        QTimer.singleShot(0, self._init_store)
+
+    @staticmethod
+    def _lbl(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("fieldLabel")
+        return lbl
+
+    def _init_store(self) -> None:
+        try:
+            self._store = DataStore()
+            self._refresh_all()
+        except Exception as exc:
+            logger.error("DataStore acilamadi: %s", exc)
+            QMessageBox.critical(
+                self, "Veritabanı Hatası", f"DataStore açılamadı:\n{exc}"
+            )
+
+    def runs_changed(self) -> None:
+        self._refresh_all()
+
+    def resizeEvent(self, event):
+        self._overlay.setGeometry(self.rect())
+        super().resizeEvent(event)
+
+    # ── Liste populate ────────────────────────────────────────────────────
+
+    def _refresh_all(self) -> None:
+        if self._store is None:
+            return
+        self._all_rows = list(self._store.list_runs())
+        self._apply_filters()
+
+    def _apply_filters(self) -> None:
+        loc = self._loc_filter.currentData()
+        axis = self._axis_filter.currentData()
+        hide_refs = self._hide_refs.isChecked()
+
+        rows = []
+        for r in self._all_rows:
+            if loc is not None and r.sensor_location != loc:
+                continue
+            if axis is not None and r.axis != axis:
+                continue
+            if hide_refs and r.is_reference:
+                continue
+            rows.append(r)
+
+        self._runs_table.setRowCount(0)
+        for r in rows:
+            i = self._runs_table.rowCount()
+            self._runs_table.insertRow(i)
+            id_item = _table_item(str(r.id), "#8b949e")
+            id_item.setData(Qt.UserRole, int(r.id))
+            self._runs_table.setItem(i, 0, id_item)
+            self._runs_table.setItem(i, 1, _table_item(r.engine_id, bold=True))
+            self._runs_table.setItem(i, 2, _table_item(r.sensor_location))
+            self._runs_table.setItem(i, 3, _table_item(r.axis))
+            self._runs_table.setItem(i, 4, _table_item(r.run_id))
+            date_str = r.measurement_date.isoformat() if r.measurement_date else "—"
+            self._runs_table.setItem(i, 5, _table_item(date_str))
+            if r.is_reference:
+                self._runs_table.setItem(i, 6, _table_item("REF", "#3fb950", bold=True))
+            else:
+                self._runs_table.setItem(i, 6, _table_item("—", "#8b949e"))
+            self._runs_table.setItem(
+                i, 7, _table_item(f"{r.rpm_min:.0f}–{r.rpm_max:.0f}")
+            )
+        self._update_sel_count()
+
+    def _selected_ids(self) -> List[int]:
+        ids: set = set()
+        for it in self._runs_table.selectedItems():
+            if it.column() == 0:
+                ids.add(int(it.data(Qt.UserRole)))
+        return sorted(ids)
+
+    def _update_sel_count(self) -> None:
+        n = len(self._selected_ids())
+        self._sel_count.setText(f"{n} satır seçili")
+        self._run_btn.setEnabled(n > 0)
+
+    # ── Analiz ────────────────────────────────────────────────────────────
+
+    def _run_fleet(self) -> None:
+        ids = self._selected_ids()
+        if not ids:
+            QMessageBox.warning(self, "Seçim yok", "Analiz için en az bir satır seçin.")
+            return
+        self._worker = DbFleetAnalysisWorker(meas_run_ids=ids)
+        self._worker.progress.connect(lambda m: self._log.append_log(m))
+        self._worker.engine_done.connect(self._on_engine_done)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+
+        self._run_btn.setEnabled(False)
+        self._score_table.setRowCount(0)
+        self._log.clear()
+        self._overlay.show_loading(f"Filo analizi… ({len(ids)} run)")
+        self._worker.start()
+
+    def _on_engine_done(self, eid: str, score: float) -> None:
+        i = self._score_table.rowCount()
+        self._score_table.insertRow(i)
+        color = "#3fb950" if score >= 80 else "#d29922" if score >= 55 else "#f85149"
+        status = "✓ OK" if score >= 80 else "⚠ Warning" if score >= 55 else "✕ Critical"
+        self._score_table.setItem(i, 0, _table_item(eid))
+        self._score_table.setItem(i, 1, _table_item(f"{score:.0f}/100", color, bold=True))
+        self._score_table.setItem(i, 2, _table_item(status, color))
+
+    def _on_finished(self, reports, ref_run) -> None:
+        self._overlay.hide_loading()
+        self._update_sel_count()
+        self._log.append_log(
+            f"✓ Filo analizi tamamlandı — {len(reports)} motor", "SUCCESS"
+        )
+        self.analysis_done.emit(reports, ref_run)
+
+    def _on_error(self, msg: str) -> None:
+        self._overlay.hide_loading()
+        self._update_sel_count()
+        self._log.append_log(f"✕ Hata: {msg}", "ERROR")
+        QMessageBox.critical(self, "Hata", msg[:400])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE: FLEET ANALYSIS  (eski, klasor-picker tabanli — Faz 8'de silinecek)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PageFleetAnalysis(QWidget):
