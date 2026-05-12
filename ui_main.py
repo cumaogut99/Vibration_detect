@@ -4,42 +4,36 @@ ui_main.py — PySide6 Ana Pencere
 Kurulum:
     pip install PySide6 matplotlib numpy scipy
 
-Başlatma:
+Baslatma:
     python ui_main.py
 """
 
 import sys
 import logging
-import traceback
-from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QSplitter,
+    QApplication, QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout, QStackedWidget,
-    QLabel, QPushButton, QFrame, QScrollArea,
-    QSizePolicy, QStatusBar, QFileDialog, QMessageBox,
+    QLabel, QFrame, QStatusBar,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QSize
-from PySide6.QtGui import QFont, QIcon, QColor, QPalette, QPixmap
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette
 
-# ── Backend imports ────────────────────────────────────────────────────────
 # Backend modullerini onceden yukle — circular import'u onler
-import models          # noqa: F401 — ilk yuklenmeli
+import models          # noqa: F401
 import engine_config   # noqa: F401
 import importers       # noqa: F401
 import analysis        # noqa: F401
 
 from ui_widgets import (
-    NavButton, SectionTitle, Divider, StatusBadge,
-    EngineCard, LoadingOverlay, LogPanel,
+    Divider, ChannelStore, TopTabButton,
 )
 from ui_pages import (
-    PageSingleAnalysis,
-    PageFleetAnalysis,
-    PageDemoRun,
-    PageResults,
+    PageDataManagement,
     PageEngineConfig,
+    PageAnalysis,
+    PageLog,
 )
 from ui_styles import STYLESHEET, PALETTE_COLORS
 
@@ -51,8 +45,6 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    """GUI uygulamasını başlatır. main.py'den veya doğrudan çağrılabilir."""
-    # High-DPI
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
@@ -98,145 +90,105 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1280, 800)
         self.resize(1440, 900)
 
-        # Central widget
+        # Tum sayfalarin paylastigi merkezi kanal deposu
+        self._store = ChannelStore(self)
+
         central = QWidget()
         self.setCentralWidget(central)
-        root_layout = QHBoxLayout(central)
+        root_layout = QVBoxLayout(central)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # ── Sidebar ───────────────────────────────────────────────────────
-        self._sidebar = self._build_sidebar()
-        root_layout.addWidget(self._sidebar)
+        # ── Ust sekme cubugu ──────────────────────────────────────────────
+        tab_bar = self._build_top_tabbar()
+        root_layout.addWidget(tab_bar)
 
-        # ── Content area ──────────────────────────────────────────────────
+        # ── Icerik alani ──────────────────────────────────────────────────
         self._stack = QStackedWidget()
         root_layout.addWidget(self._stack, stretch=1)
 
-        # ── Pages ─────────────────────────────────────────────────────────
-        self._page_single  = PageSingleAnalysis(self)
-        self._page_fleet   = PageFleetAnalysis(self)
-        self._page_demo    = PageDemoRun(self)
-        self._page_results = PageResults(self)
+        # ── Sayfalar ──────────────────────────────────────────────────────
+        self._page_data    = PageDataManagement(self._store, self)
         self._page_config  = PageEngineConfig(self)
+        self._page_analyze = PageAnalysis(self._store, self)
+        self._page_log     = PageLog(self)
 
-        self._stack.addWidget(self._page_single)   # index 0
-        self._stack.addWidget(self._page_fleet)    # index 1
-        self._stack.addWidget(self._page_demo)     # index 2
-        self._stack.addWidget(self._page_results)  # index 3
-        self._stack.addWidget(self._page_config)   # index 4
+        self._stack.addWidget(self._page_data)    # index 0
+        self._stack.addWidget(self._page_config)  # index 1
+        self._stack.addWidget(self._page_analyze) # index 2
+        self._stack.addWidget(self._page_log)     # index 3
 
-        # Connect page signals to result viewer
-        self._page_single.analysis_done.connect(self._on_analysis_done)
-        self._page_fleet.analysis_done.connect(self._on_fleet_done)
-        self._page_demo.analysis_done.connect(self._on_fleet_done)
+        # Sayfalardan gelen log mesajlarini Log sayfasina yonlendir
+        self._page_data.log_message.connect(self._on_log)
+        self._page_analyze.log_message.connect(self._on_log)
 
-        # ── Status bar ────────────────────────────────────────────────────
+        # Durum cubugu
         self._status = QStatusBar()
         self._status.setObjectName("statusBar")
         self.setStatusBar(self._status)
-        self._status.showMessage("Hazır  ·  Veri dosyası yükleyin veya Demo çalıştırın")
+        self._status.showMessage("Hazir  ·  Veri Yonetimi'nden bir kanal yukleyin")
 
-        # Select first page
+        # Yuklenmis kanal sayisini durum cubugunda goster
+        self._store.channel_added.connect(self._refresh_status)
+        self._store.channel_removed.connect(self._refresh_status)
+
+        # Ilk sayfa
         self._select_page(0)
 
-    # ── Sidebar ───────────────────────────────────────────────────────────
+    # ── Top tabbar ─────────────────────────────────────────────────────────
 
-    def _build_sidebar(self) -> QWidget:
-        sidebar = QWidget()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+    def _build_top_tabbar(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("topTabBar")
+        bar.setFixedHeight(54)
 
-        layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(20, 8, 20, 0)
+        layout.setSpacing(4)
 
-        # Logo / title
-        title_frame = QFrame()
-        title_frame.setObjectName("sidebarTitle")
-        title_frame.setFixedHeight(72)
-        tl = QVBoxLayout(title_frame)
-        tl.setContentsMargins(20, 14, 20, 14)
+        # Logo
         logo = QLabel("✈  VibAnalyzer")
         logo.setObjectName("logoLabel")
-        sub  = QLabel("Piston Engine Diagnostics")
-        sub.setObjectName("logoSub")
-        tl.addWidget(logo)
-        tl.addWidget(sub)
-        layout.addWidget(title_frame)
+        layout.addWidget(logo)
+        layout.addSpacing(24)
 
-        # Divider
-        layout.addWidget(Divider())
-
-        # Nav section label
-        nav_label = QLabel("  ANALİZ")
-        nav_label.setObjectName("navSection")
-        layout.addWidget(nav_label)
-
-        # Nav buttons
-        self._nav_buttons: list[NavButton] = []
-
+        # 4 sekme
+        self._tab_buttons: list[TopTabButton] = []
         items = [
-            ("🔍  Tek Motor Analizi",  0),
-            ("🚁  Filo Analizi",       1),
-            ("⚡  Demo Çalıştır",      2),
+            ("📂  Veri Yonetimi",       0),
+            ("⚙️  Motor Konfigurasyonu", 1),
+            ("📈  Analiz",                2),
+            ("📋  Log",                   3),
         ]
         for label, idx in items:
-            btn = NavButton(label, idx)
+            btn = TopTabButton(label, idx)
             btn.clicked.connect(lambda _, i=idx: self._select_page(i))
-            self._nav_buttons.append(btn)
+            self._tab_buttons.append(btn)
             layout.addWidget(btn)
-
-        layout.addSpacing(16)
-        layout.addWidget(Divider())
-
-        nav_label2 = QLabel("  ARAÇLAR")
-        nav_label2.setObjectName("navSection")
-        layout.addWidget(nav_label2)
-
-        btn_results = NavButton("📊  Son Sonuçlar", 3)
-        btn_results.clicked.connect(lambda: self._select_page(3))
-        self._nav_buttons.append(btn_results)
-        layout.addWidget(btn_results)
-
-        btn_config = NavButton("⚙️  Motor Konfigürasyonu", 4)
-        btn_config.clicked.connect(lambda: self._select_page(4))
-        self._nav_buttons.append(btn_config)
-        layout.addWidget(btn_config)
 
         layout.addStretch()
 
-        # Version footer
-        ver = QLabel("v1.0  ·  4-cyl 4-stroke")
+        ver = QLabel("v2.0  ·  4-cyl 4-stroke")
         ver.setObjectName("sidebarVer")
-        ver.setAlignment(Qt.AlignCenter)
         layout.addWidget(ver)
-        layout.addSpacing(12)
 
-        return sidebar
+        return bar
 
     def _select_page(self, index: int) -> None:
         self._stack.setCurrentIndex(index)
-        for btn in self._nav_buttons:
+        for btn in self._tab_buttons:
             btn.setActive(btn.page_index == index)
 
-    # ── Callbacks ─────────────────────────────────────────────────────────
+    # ── Log yonlendirme ───────────────────────────────────────────────────
 
-    def _on_analysis_done(self, report, order_data, ref_order_data, run, ref_run) -> None:
-        self._page_results.show_single(report, order_data, ref_order_data, run, ref_run)
-        self._select_page(3)
-        self._status.showMessage(
-            f"Analiz tamamlandı  ·  {report.engine_id}  ·  "
-            f"Skor: {report.overall_health_score}/100  ·  "
-            f"Anomali: {len(report.anomalies)}"
-        )
+    def _on_log(self, msg: str, level: str) -> None:
+        self._page_log.append(msg, level)
+        if level in ("SUCCESS", "ERROR"):
+            self._status.showMessage(msg, 5000)
 
-    def _on_fleet_done(self, reports: dict, ref_run) -> None:
-        self._page_results.show_fleet(reports, ref_run)
-        self._select_page(3)
-        self._status.showMessage(
-            f"Filo analizi tamamlandı  ·  {len(reports)} motor"
-        )
+    def _refresh_status(self, *_args) -> None:
+        n = len(self._store)
+        self._status.showMessage(f"Yuklenmis kanal sayisi: {n}")
 
     def show_status(self, msg: str) -> None:
         self._status.showMessage(msg)

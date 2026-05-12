@@ -1,12 +1,11 @@
 """
-ui_pages.py — Tüm sayfa widget'ları.
+ui_pages.py — Tum sayfa widget'lari.
 
 Sayfalar:
-  PageSingleAnalysis  — Tek motor analizi
-  PageFleetAnalysis   — Filo analizi
-  PageDemoRun         — Demo / sentetik veri
-  PageResults         — Sonuç görüntüleyici (waterfall + order + diagnose)
-  PageEngineConfig    — Engine config'i göster/açıkla
+  PageDataManagement  — Veri yukleme + yuklenmis kanallari listele/filtrele
+  PageEngineConfig    — engine_config tanimlarini goster
+  PageAnalysis        — Tek kanal goruntuleme veya iki kanal karsilastirma
+  PageLog             — Genel uygulama logu
 """
 
 import logging
@@ -17,16 +16,17 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QSplitter, QTabWidget, QTableWidget,
     QTableWidgetItem, QComboBox, QLineEdit, QHeaderView,
-    QSizePolicy, QMessageBox, QTextEdit,
+    QMessageBox, QTextEdit, QRadioButton, QButtonGroup,
+    QStackedWidget,
 )
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 
-from ui_worker import AnalysisWorker, FleetAnalysisWorker, DemoWorker
+from ui_worker import LoadChannelWorker, CompareChannelsWorker, SingleChannelWorker
 from ui_widgets import (
     SectionTitle, Divider, StatusBadge, HealthScoreDial,
     EngineCard, FilePickerRow, FolderPickerRow,
-    LoadingOverlay, LogPanel, MatplotlibCanvas,
+    LoadingOverlay, LogPanel, MatplotlibCanvas, ChannelStore,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,6 @@ def _page_header(title: str, subtitle: str) -> QWidget:
 
 
 def _card(title: str = "") -> tuple[QFrame, QVBoxLayout]:
-    """Returns (card frame, body layout)."""
     card = QFrame()
     card.setObjectName("card")
     cl = QVBoxLayout(card)
@@ -112,566 +111,541 @@ def _severity_color(sev: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  PAGE: SINGLE ANALYSIS
+#  PAGE: VERI YONETIMI
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PageSingleAnalysis(QWidget):
+class PageDataManagement(QWidget):
+    """Veri yukleme ve yuklenmis kanallari yonetme sayfasi."""
 
-    analysis_done = Signal(object, object, object, object, object)
+    log_message = Signal(str, str)   # (msg, level)
 
-    def __init__(self, parent=None):
+    def __init__(self, store: ChannelStore, parent=None):
         super().__init__(parent)
         self.setObjectName("pageContent")
-        self._worker = None
+        self._store = store
+        self._worker: Optional[LoadChannelWorker] = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(28, 24, 28, 24)
         outer.setSpacing(20)
 
         outer.addWidget(_page_header(
-            "🔍  Tek Motor Analizi",
-            "Bir motoru referans motor ile karşılaştırın ve arıza teşhisi yapın.",
+            "📂  Veri Yonetimi",
+            "Olcum dosyalarini yukleyin ve mevcut kanallari yonetin.",
         ))
         outer.addWidget(Divider())
 
-        # ── Two-column layout ─────────────────────────────────────────────
+        # Iki sutunlu yerlesim — sol: yukleme kart, sag: kanal listesi
         cols = QHBoxLayout()
         cols.setSpacing(16)
         outer.addLayout(cols, stretch=1)
 
-        # Left: Settings
-        left = QVBoxLayout()
-        left.setSpacing(14)
-        cols.addLayout(left, stretch=0)
+        # ── Sol: Veri yukleme kart ────────────────────────────────────────
+        left_wrap = QVBoxLayout()
+        left_wrap.setSpacing(14)
+        cols.addLayout(left_wrap, stretch=0)
 
-        # Referans dosya kartı
-        ref_card, ref_body = _card("📂  Referans Motor")
-        self._ref_picker = FilePickerRow("Referans dosya:")
-        ref_body.addWidget(self._ref_picker)
-        ref_id_row = QLineEdit()
-        ref_id_row.setPlaceholderText("REF-001")
-        ref_id_row.setText("REF-001")
-        self._ref_id = ref_id_row
-        ref_body.addLayout(_field_row("Referans ID:", ref_id_row))
-        left.addWidget(ref_card)
+        upload_card, upload_body = _card("⬆️  Veri Yukle")
+        self._picker = FilePickerRow("Veri dosyasi:")
+        upload_body.addWidget(self._picker)
 
-        # Ölçüm dosya kartı
-        meas_card, meas_body = _card("📊  Analiz Edilecek Motor")
-        self._meas_picker = FilePickerRow("Veri dosyası:")
-        meas_body.addWidget(self._meas_picker)
-        meas_id_edit = QLineEdit()
-        meas_id_edit.setPlaceholderText("ENG-042")
-        self._meas_id = meas_id_edit
-        meas_body.addLayout(_field_row("Motor ID:", meas_id_edit))
-        run_id_edit = QLineEdit()
-        run_id_edit.setPlaceholderText("RUN-001")
-        run_id_edit.setText("RUN-001")
-        self._run_id = run_id_edit
-        meas_body.addLayout(_field_row("Run ID:", run_id_edit))
-        left.addWidget(meas_card)
+        eng_edit = QLineEdit()
+        eng_edit.setPlaceholderText("ENG-042")
+        self._engine_id = eng_edit
+        upload_body.addLayout(_field_row("Motor ID:", eng_edit))
 
-        # Parametreler kartı
-        param_card, param_body = _card("⚙️  Parametreler")
+        run_edit = QLineEdit()
+        run_edit.setPlaceholderText("RUN-001")
+        run_edit.setText("RUN-001")
+        self._run_id = run_edit
+        upload_body.addLayout(_field_row("Run ID:", run_edit))
+
         from engine_config import LOCATION_CODES, LOCATION_NAMES
         sensor_combo = QComboBox()
         for code in LOCATION_CODES:
             sensor_combo.addItem(f"{code}  —  {LOCATION_NAMES[code]}", code)
         self._sensor_combo = sensor_combo
-        param_body.addLayout(_field_row("Sensör lokasyonu:", sensor_combo))
+        upload_body.addLayout(_field_row("Sensor lokasyonu:", sensor_combo))
 
         axis_combo = QComboBox()
         axis_combo.addItems(["X", "Y", "Z"])
         self._axis_combo = axis_combo
-        param_body.addLayout(_field_row("Eksen:", axis_combo))
+        upload_body.addLayout(_field_row("Eksen:", axis_combo))
 
-        freq_max = QLineEdit("3000")
-        self._freq_max = freq_max
-        param_body.addLayout(_field_row("Maks. frekans (Hz):", freq_max))
-        left.addWidget(param_card)
+        self._load_btn = QPushButton("➕  Kanali Yukle")
+        self._load_btn.setObjectName("btnPrimary")
+        self._load_btn.setFixedHeight(40)
+        self._load_btn.clicked.connect(self._load_channel)
+        upload_body.addWidget(self._load_btn)
 
-        # Çalıştır butonu
-        self._run_btn = QPushButton("▶  Analizi Başlat")
-        self._run_btn.setObjectName("btnPrimary")
-        self._run_btn.setFixedHeight(42)
-        self._run_btn.clicked.connect(self._run_analysis)
-        left.addWidget(self._run_btn)
+        # auto-fill from filename if possible
+        self._picker.file_selected.connect(self._on_file_selected)
 
-        left.addStretch()
+        left_wrap.addWidget(upload_card)
+        left_wrap.addStretch()
+        # Sabit genislik — sag tarafa yer birak
+        upload_card.setFixedWidth(420)
 
-        # Right: Log
-        right = QVBoxLayout()
-        cols.addLayout(right, stretch=1)
+        # ── Sag: Yuklenmis kanallar listesi ───────────────────────────────
+        right_wrap = QVBoxLayout()
+        right_wrap.setSpacing(14)
+        cols.addLayout(right_wrap, stretch=1)
 
-        log_card, log_body = _card("📋  İşlem Günlüğü")
-        self._log = LogPanel()
-        self._log.setMinimumHeight(300)
-        log_body.addWidget(self._log)
-        right.addWidget(log_card, stretch=1)
+        list_card, list_body = _card("🗂️  Yuklenmis Kanallar")
 
-        # Loading overlay
+        # Filtre satiri
+        filter_row = QHBoxLayout()
+        flt_lbl = QLabel("🔎  Filtrele:")
+        flt_lbl.setObjectName("fieldLabel")
+        filter_row.addWidget(flt_lbl)
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("Motor ID, lokasyon veya eksene gore ara...")
+        self._filter_edit.textChanged.connect(self._apply_filter)
+        filter_row.addWidget(self._filter_edit, stretch=1)
+        self._count_label = QLabel("0 kanal")
+        self._count_label.setObjectName("fieldLabel")
+        filter_row.addWidget(self._count_label)
+        list_body.addLayout(filter_row)
+
+        # Kanal tablosu
+        self._channel_table = _make_table([
+            "Kanal", "Motor ID", "Lokasyon", "Eksen",
+            "Run ID", "RPM Aralıgi", "Slice", "İslem",
+        ])
+        hdr = self._channel_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        list_body.addWidget(self._channel_table, stretch=1)
+
+        right_wrap.addWidget(list_card, stretch=1)
+
+        # Store sinyallerine baglan
+        self._store.channel_added.connect(self._on_channel_added)
+        self._store.channel_removed.connect(self._on_channel_removed)
+
+        # key -> row index haritasi (dinamik olarak yeniden olusturulur)
+        self._row_keys: list[str] = []
+
         self._overlay = LoadingOverlay(self)
 
     def resizeEvent(self, event):
         self._overlay.setGeometry(self.rect())
         super().resizeEvent(event)
 
-    def _run_analysis(self):
-        if not self._ref_picker.path():
-            QMessageBox.warning(self, "Eksik giriş", "Lütfen referans veri dosyasını seçin.")
+    # ── Dosya secimi sonrasi alan doldurma ────────────────────────────────
+    def _on_file_selected(self, path: str):
+        from importers import parse_filename
+        parsed = parse_filename(Path(path))
+        if not parsed:
             return
-        if not self._meas_picker.path():
-            QMessageBox.warning(self, "Eksik giriş", "Lütfen analiz edilecek veri dosyasını seçin.")
-            return
+        self._engine_id.setText(parsed["engine_id"])
+        self._run_id.setText(parsed["run_id"])
+        # Lokasyonu combo'da bul
+        loc = parsed["location"]
+        for i in range(self._sensor_combo.count()):
+            if self._sensor_combo.itemData(i) == loc:
+                self._sensor_combo.setCurrentIndex(i)
+                break
+        # Ekseni combo'da bul
+        ax = parsed["axis"]
+        idx_a = self._axis_combo.findText(ax)
+        if idx_a >= 0:
+            self._axis_combo.setCurrentIndex(idx_a)
 
-        try:
-            freq_max = float(self._freq_max.text() or "3000")
-        except ValueError:
-            freq_max = 3000.0
+    def _load_channel(self):
+        if not self._picker.path():
+            QMessageBox.warning(self, "Eksik giris", "Lutfen veri dosyasi secin.")
+            return
+        if not self._engine_id.text().strip():
+            QMessageBox.warning(self, "Eksik giris", "Motor ID giriniz.")
+            return
 
         loc_code = self._sensor_combo.currentData() or self._sensor_combo.currentText().split()[0]
-        self._worker = AnalysisWorker(
-            ref_path       = self._ref_picker.path(),
-            ref_id         = self._ref_id.text() or "REF",
-            meas_path      = self._meas_picker.path(),
-            meas_id        = self._meas_id.text() or "ENG",
-            sensor_location= loc_code,
-            axis           = self._axis_combo.currentText(),
-            run_id         = self._run_id.text() or "RUN-001",
-            freq_max       = freq_max,
+        self._worker = LoadChannelWorker(
+            path            = self._picker.path(),
+            engine_id       = self._engine_id.text().strip(),
+            run_id          = self._run_id.text().strip() or "RUN-001",
+            sensor_location = loc_code,
+            axis            = self._axis_combo.currentText(),
         )
-        self._worker.progress.connect(self._on_progress)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.error.connect(self._on_error)
+        self._worker.progress.connect(lambda m: self.log_message.emit(m, "INFO"))
+        self._worker.finished.connect(self._on_load_done)
+        self._worker.error.connect(self._on_load_error)
 
-        self._run_btn.setEnabled(False)
-        self._overlay.show_loading("Analiz çalışıyor…", self._meas_id.text())
-        self._log.clear()
+        self._load_btn.setEnabled(False)
+        self._overlay.show_loading("Kanal yukleniyor...",
+                                   Path(self._picker.path()).name)
         self._worker.start()
 
-    def _on_progress(self, msg: str):
-        self._log.append_log(msg, "INFO")
-        self._overlay._sub.setText(msg)
-
-    def _on_finished(self, report, order_data, ref_order_data, run, ref_run):
+    def _on_load_done(self, run):
         self._overlay.hide_loading()
-        self._run_btn.setEnabled(True)
-        self._log.append_log(
-            f"✓ Tamamlandı — Skor: {report.overall_health_score}/100  "
-            f"| Anomali: {len(report.anomalies)}  "
-            f"| Teşhis: {len(report.fault_diagnoses)}",
-            "SUCCESS",
-        )
-        self.analysis_done.emit(report, order_data, ref_order_data, run, ref_run)
+        self._load_btn.setEnabled(True)
+        key = self._store.add(run)
+        self.log_message.emit(f"✓ Kanal eklendi: {key}", "SUCCESS")
 
-    def _on_error(self, msg: str):
+    def _on_load_error(self, msg: str):
         self._overlay.hide_loading()
-        self._run_btn.setEnabled(True)
-        self._log.append_log(f"✕ Hata: {msg}", "ERROR")
-        QMessageBox.critical(self, "Analiz Hatası", msg[:400])
+        self._load_btn.setEnabled(True)
+        self.log_message.emit(f"✕ Yukleme hatasi: {msg.splitlines()[0]}", "ERROR")
+        QMessageBox.critical(self, "Yukleme Hatasi", msg[:400])
+
+    # ── Tablo yonetimi ────────────────────────────────────────────────────
+    def _on_channel_added(self, key: str, run):
+        self._rebuild_table()
+
+    def _on_channel_removed(self, key: str):
+        self._rebuild_table()
+
+    def _rebuild_table(self):
+        self._channel_table.setRowCount(0)
+        self._row_keys.clear()
+        query = self._filter_edit.text().strip().lower()
+
+        for key, run in self._store.items():
+            if query and query not in key.lower():
+                continue
+            row = self._channel_table.rowCount()
+            self._channel_table.insertRow(row)
+            self._row_keys.append(key)
+
+            rpm_lo, rpm_hi = run.rpm_range
+            self._channel_table.setItem(row, 0, _table_item(key, "#e6edf3"))
+            self._channel_table.setItem(row, 1, _table_item(run.engine_id, "#58a6ff", bold=True))
+            self._channel_table.setItem(row, 2, _table_item(run.sensor_location))
+            self._channel_table.setItem(row, 3, _table_item(run.axis))
+            self._channel_table.setItem(row, 4, _table_item(run.run_id))
+            self._channel_table.setItem(row, 5, _table_item(f"{rpm_lo:.0f}–{rpm_hi:.0f}"))
+            self._channel_table.setItem(row, 6, _table_item(str(run.n_slices)))
+
+            btn = QPushButton("🗑  Kaldir")
+            btn.setObjectName("btnBrowse")
+            btn.clicked.connect(lambda _checked=False, k=key: self._store.remove(k))
+            self._channel_table.setCellWidget(row, 7, btn)
+
+        self._count_label.setText(f"{self._channel_table.rowCount()} kanal")
+
+    def _apply_filter(self, _text: str):
+        self._rebuild_table()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  PAGE: FLEET ANALYSIS
+#  PAGE: ANALIZ  (tek kanal goruntuleme + iki kanal karsilastirma)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PageFleetAnalysis(QWidget):
+class PageAnalysis(QWidget):
+    """Tek kanal goruntuleme + iki kanal karsilastirma sayfasi."""
 
-    analysis_done = Signal(object, object)
+    log_message = Signal(str, str)
 
-    def __init__(self, parent=None):
+    def __init__(self, store: ChannelStore, parent=None):
         super().__init__(parent)
         self.setObjectName("pageContent")
+        self._store = store
         self._worker = None
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 24, 28, 24)
-        outer.setSpacing(20)
-
-        outer.addWidget(_page_header(
-            "🚁  Filo Analizi",
-            "Bir klasördeki tüm motorları toplu olarak analiz edin.",
-        ))
-        outer.addWidget(Divider())
-
-        cols = QHBoxLayout()
-        cols.setSpacing(16)
-        outer.addLayout(cols, stretch=1)
-
-        # Left settings
-        left = QVBoxLayout()
-        left.setSpacing(14)
-        cols.addLayout(left, stretch=0)
-
-        ref_card, ref_body = _card("📂  Referans Motor")
-        self._ref_picker = FilePickerRow("Referans dosya:")
-        ref_body.addWidget(self._ref_picker)
-        ref_id_edit = QLineEdit("REF-001")
-        self._ref_id = ref_id_edit
-        ref_body.addLayout(_field_row("Referans ID:", ref_id_edit))
-        left.addWidget(ref_card)
-
-        fleet_card, fleet_body = _card("🗂️  Filo Klasörü")
-        self._fleet_picker = FolderPickerRow("Filo klasörü:")
-        fleet_body.addWidget(self._fleet_picker)
-        self._fleet_picker.folder_selected.connect(self._on_folder_selected)
-        self._fleet_info = QLabel("—  motor")
-        self._fleet_info.setObjectName("fieldLabel")
-        fleet_body.addWidget(self._fleet_info)
-        left.addWidget(fleet_card)
-
-        param_card, param_body = _card("⚙️  Parametreler")
-        from engine_config import LOCATION_CODES, LOCATION_NAMES
-        sensor_combo2 = QComboBox()
-        for code in LOCATION_CODES:
-            sensor_combo2.addItem(f"{code}  —  {LOCATION_NAMES[code]}", code)
-        self._sensor_combo = sensor_combo2
-        param_body.addLayout(_field_row("Sensör lokasyonu:", sensor_combo2))
-
-        axis_combo2 = QComboBox()
-        axis_combo2.addItems(["X", "Y", "Z"])
-        self._axis_combo = axis_combo2
-        param_body.addLayout(_field_row("Eksen:", axis_combo2))
-        left.addWidget(param_card)
-
-        self._run_btn = QPushButton("▶  Filo Analizini Başlat")
-        self._run_btn.setObjectName("btnPrimary")
-        self._run_btn.setFixedHeight(42)
-        self._run_btn.clicked.connect(self._run_fleet)
-        left.addWidget(self._run_btn)
-        left.addStretch()
-
-        # Right: progress
-        right = QVBoxLayout()
-        right.setSpacing(12)
-        cols.addLayout(right, stretch=1)
-
-        prog_card, prog_body = _card("📋  İlerleme")
-        self._log = LogPanel()
-        self._log.setMinimumHeight(200)
-        prog_body.addWidget(self._log)
-        right.addWidget(prog_card, stretch=1)
-
-        # Mini engine score list
-        score_card, score_body = _card("Motor Skorları")
-        self._score_table = _make_table(["Motor ID", "Skor", "Durum"])
-        self._score_table.setMaximumHeight(220)
-        score_body.addWidget(self._score_table)
-        right.addWidget(score_card)
-
-        self._overlay = LoadingOverlay(self)
-
-    def resizeEvent(self, event):
-        self._overlay.setGeometry(self.rect())
-        super().resizeEvent(event)
-
-    def _on_folder_selected(self, folder: str):
-        from pathlib import Path
-        files = [f for f in Path(folder).iterdir()
-                 if f.suffix.lower() in {".csv", ".npz", ".txt", ".dat"}]
-        self._fleet_info.setText(f"{len(files)} motor dosyası bulundu")
-
-    def _run_fleet(self):
-        if not self._ref_picker.path():
-            QMessageBox.warning(self, "Eksik giriş", "Referans dosyası seçin.")
-            return
-        if not self._fleet_picker.path():
-            QMessageBox.warning(self, "Eksik giriş", "Filo klasörünü seçin.")
-            return
-
-        loc_code2 = self._sensor_combo.currentData() or self._sensor_combo.currentText().split()[0]
-        self._worker = FleetAnalysisWorker(
-            ref_path       = self._ref_picker.path(),
-            ref_id         = self._ref_id.text() or "REF",
-            fleet_dir      = self._fleet_picker.path(),
-            sensor_location= loc_code2,
-            axis           = self._axis_combo.currentText(),
-        )
-        self._worker.progress.connect(lambda m: self._log.append_log(m))
-        self._worker.engine_done.connect(self._on_engine_done)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.error.connect(self._on_error)
-
-        self._run_btn.setEnabled(False)
-        self._score_table.setRowCount(0)
-        self._overlay.show_loading("Filo analizi çalışıyor…")
-        self._log.clear()
-        self._worker.start()
-
-    def _on_engine_done(self, eid: str, score: float):
-        row = self._score_table.rowCount()
-        self._score_table.insertRow(row)
-        color = "#3fb950" if score >= 80 else "#d29922" if score >= 55 else "#f85149"
-        sev = "ok" if score >= 80 else "warning" if score >= 55 else "critical"
-        status_map = {"ok": "✓ OK", "warning": "⚠ Warning", "critical": "✕ Critical"}
-        self._score_table.setItem(row, 0, _table_item(eid))
-        self._score_table.setItem(row, 1, _table_item(f"{score:.0f}/100", color, bold=True))
-        self._score_table.setItem(row, 2, _table_item(status_map[sev], color))
-
-    def _on_finished(self, reports, ref_run):
-        self._overlay.hide_loading()
-        self._run_btn.setEnabled(True)
-        self._log.append_log(f"✓ Filo analizi tamamlandı — {len(reports)} motor", "SUCCESS")
-        self.analysis_done.emit(reports, ref_run)
-
-    def _on_error(self, msg: str):
-        self._overlay.hide_loading()
-        self._run_btn.setEnabled(True)
-        self._log.append_log(f"✕ Hata: {msg}", "ERROR")
-        QMessageBox.critical(self, "Hata", msg[:400])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  PAGE: DEMO RUN
-# ─────────────────────────────────────────────────────────────────────────────
-
-class PageDemoRun(QWidget):
-
-    analysis_done = Signal(object, object)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("pageContent")
-        self._worker = None
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 24, 28, 24)
-        outer.setSpacing(20)
-
-        outer.addWidget(_page_header(
-            "⚡  Demo Çalıştır",
-            "Sentetik veri ile 4 motoru (magneto arızası, dengesizlik, yanma anomalisi, sağlıklı) analiz edin.",
-        ))
-        outer.addWidget(Divider())
-
-        # Demo açıklama kartı
-        info_card, info_body = _card("ℹ️  Demo Hakkında")
-        desc = QLabel(
-            "Demo modu şu sentetik motorları oluşturur:\n\n"
-            "  •  ENG-042  —  Magneto Dişli Aşınması  (29× ve 58× order yüksek)\n"
-            "  •  ENG-043  —  Kütle Dengesizliği  (1× ve 2× order yüksek)\n"
-            "  •  ENG-044  —  Yanma Anomalisi / Misfire  (0.5× ve 2× order yüksek)\n"
-            "  •  ENG-045  —  Sağlıklı Motor  (referansa yakın)\n\n"
-            "Gerçek verilerle kullanım için 'Tek Motor' veya 'Filo Analizi' sayfasını kullanın."
-        )
-        desc.setObjectName("fieldLabel")
-        desc.setWordWrap(True)
-        info_body.addWidget(desc)
-        outer.addWidget(info_card)
-
-        # Run button
-        run_row = QHBoxLayout()
-        self._run_btn = QPushButton("⚡  Demo Analizi Başlat")
-        self._run_btn.setObjectName("btnSuccess")
-        self._run_btn.setFixedHeight(46)
-        self._run_btn.setFixedWidth(280)
-        self._run_btn.clicked.connect(self._run_demo)
-        run_row.addWidget(self._run_btn)
-        run_row.addStretch()
-        outer.addLayout(run_row)
-
-        # Log + score
-        cols = QHBoxLayout()
-        cols.setSpacing(16)
-        outer.addLayout(cols, stretch=1)
-
-        log_card, log_body = _card("📋  İşlem Günlüğü")
-        self._log = LogPanel()
-        log_body.addWidget(self._log)
-        cols.addWidget(log_card, stretch=1)
-
-        score_card, score_body = _card("Motor Sonuçları")
-        self._score_table = _make_table(["Motor ID", "Skor", "Beklenen Arıza"])
-        score_body.addWidget(self._score_table)
-        cols.addWidget(score_card, stretch=1)
-
-        self._overlay = LoadingOverlay(self)
-
-    def resizeEvent(self, event):
-        self._overlay.setGeometry(self.rect())
-        super().resizeEvent(event)
-
-    def _run_demo(self):
-        self._worker = DemoWorker()
-        self._worker.progress.connect(lambda m: self._log.append_log(m))
-        self._worker.engine_done.connect(self._on_engine_done)
-        self._worker.finished.connect(self._on_finished)
-        self._worker.error.connect(self._on_error)
-
-        self._run_btn.setEnabled(False)
-        self._score_table.setRowCount(0)
-        self._overlay.show_loading("Demo verisi hazırlanıyor…")
-        self._log.clear()
-        self._worker.start()
-
-    def _on_engine_done(self, eid: str, score: float):
-        row = self._score_table.rowCount()
-        self._score_table.insertRow(row)
-        color = "#3fb950" if score >= 80 else "#d29922" if score >= 55 else "#f85149"
-        fault_hints = {
-            "ENG-042": "Magneto Dişli Aşınması",
-            "ENG-043": "Kütle Dengesizliği",
-            "ENG-044": "Yanma Anomalisi",
-            "ENG-045": "Sağlıklı",
-        }
-        hint = next((v for k, v in fault_hints.items() if k in eid), "—")
-        self._score_table.setItem(row, 0, _table_item(eid))
-        self._score_table.setItem(row, 1, _table_item(f"{score:.0f}/100", color, bold=True))
-        self._score_table.setItem(row, 2, _table_item(hint))
-
-    def _on_finished(self, reports, ref_run):
-        self._overlay.hide_loading()
-        self._run_btn.setEnabled(True)
-        self._log.append_log("✓ Demo tamamlandı — Sonuçlar sayfasına yönlendiriliyorsunuz…", "SUCCESS")
-        self.analysis_done.emit(reports, ref_run)
-
-    def _on_error(self, msg: str):
-        self._overlay.hide_loading()
-        self._run_btn.setEnabled(True)
-        self._log.append_log(f"✕ Hata: {msg}", "ERROR")
-        QMessageBox.critical(self, "Demo Hatası", msg[:400])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  PAGE: RESULTS
-# ─────────────────────────────────────────────────────────────────────────────
-
-class PageResults(QWidget):
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("pageContent")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(28, 24, 28, 24)
         outer.setSpacing(16)
 
         outer.addWidget(_page_header(
-            "📊  Analiz Sonuçları",
-            "Waterfall grafiği, order karşılaştırması ve teşhis raporu.",
+            "📈  Analiz",
+            "Tek kanal goruntuleme veya iki kanal arasi karsilastirma yapin.",
         ))
         outer.addWidget(Divider())
 
-        # Engine selector (fleet mode)
-        selector_row = QHBoxLayout()
-        selector_row.setSpacing(10)
-        lbl = QLabel("Motor seç:")
-        lbl.setObjectName("fieldLabel")
-        selector_row.addWidget(lbl)
-        self._engine_combo = QComboBox()
-        self._engine_combo.setFixedWidth(260)
-        self._engine_combo.currentTextChanged.connect(self._on_engine_selected)
-        selector_row.addWidget(self._engine_combo)
-        selector_row.addStretch()
-        outer.addLayout(selector_row)
+        # ── Mod secici ────────────────────────────────────────────────────
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(20)
 
-        # Main splitter: left=plots, right=diagnosis
+        self._rb_single  = QRadioButton("Tek Kanal Goruntuleme")
+        self._rb_compare = QRadioButton("İki Kanal Karsilastirma")
+        self._rb_single.setChecked(True)
+
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.addButton(self._rb_single, 0)
+        self._mode_group.addButton(self._rb_compare, 1)
+        self._mode_group.idToggled.connect(self._on_mode_changed)
+
+        mode_row.addWidget(self._rb_single)
+        mode_row.addWidget(self._rb_compare)
+        mode_row.addStretch()
+        outer.addLayout(mode_row)
+
+        # ── Kanal seciciler (modlara gore degisir) ────────────────────────
+        self._selector_stack = QStackedWidget()
+        outer.addWidget(self._selector_stack)
+
+        # Tek kanal moduyle ilgili kontroller
+        single_wrap = QWidget()
+        sw_l = QHBoxLayout(single_wrap)
+        sw_l.setContentsMargins(0, 0, 0, 0)
+        sw_l.setSpacing(10)
+        lbl_s = QLabel("Kanal:")
+        lbl_s.setObjectName("fieldLabel")
+        lbl_s.setFixedWidth(120)
+        sw_l.addWidget(lbl_s)
+        self._single_combo = QComboBox()
+        self._single_combo.setMinimumWidth(380)
+        sw_l.addWidget(self._single_combo, stretch=1)
+        self._single_run_btn = QPushButton("▶  Goruntule")
+        self._single_run_btn.setObjectName("btnPrimary")
+        self._single_run_btn.clicked.connect(self._run_single)
+        sw_l.addWidget(self._single_run_btn)
+        self._selector_stack.addWidget(single_wrap)
+
+        # Iki kanal modunun kontrolleri
+        compare_wrap = QWidget()
+        cw_l = QVBoxLayout(compare_wrap)
+        cw_l.setContentsMargins(0, 0, 0, 0)
+        cw_l.setSpacing(8)
+
+        ref_row = QHBoxLayout()
+        lbl_r = QLabel("Referans kanal:")
+        lbl_r.setObjectName("fieldLabel")
+        lbl_r.setFixedWidth(140)
+        ref_row.addWidget(lbl_r)
+        self._ref_combo = QComboBox()
+        ref_row.addWidget(self._ref_combo, stretch=1)
+        cw_l.addLayout(ref_row)
+
+        main_row = QHBoxLayout()
+        lbl_m = QLabel("Ana (olcum) kanal:")
+        lbl_m.setObjectName("fieldLabel")
+        lbl_m.setFixedWidth(140)
+        main_row.addWidget(lbl_m)
+        self._main_combo = QComboBox()
+        main_row.addWidget(self._main_combo, stretch=1)
+        cw_l.addLayout(main_row)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self._compare_run_btn = QPushButton("▶  Karsilastir")
+        self._compare_run_btn.setObjectName("btnPrimary")
+        self._compare_run_btn.clicked.connect(self._run_compare)
+        btn_row.addWidget(self._compare_run_btn)
+        cw_l.addLayout(btn_row)
+        self._selector_stack.addWidget(compare_wrap)
+
+        outer.addWidget(Divider())
+
+        # ── Sonuc bolumu: sol grafik tablari, sag tani panel ───────────────
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(6)
         outer.addWidget(splitter, stretch=1)
 
-        # ── Left: plot tabs ───────────────────────────────────────────────
-        plot_widget = QWidget()
-        plot_layout = QVBoxLayout(plot_widget)
-        plot_layout.setContentsMargins(0, 0, 0, 0)
-        plot_layout.setSpacing(0)
-
+        # Grafik tablari
         self._plot_tabs = QTabWidget()
         self._plot_tabs.setObjectName("plotTabs")
-        plot_layout.addWidget(self._plot_tabs)
+        splitter.addWidget(self._plot_tabs)
 
-        self._canvas_waterfall = MatplotlibCanvas()
-        self._canvas_orders    = MatplotlibCanvas()
-        self._canvas_card      = MatplotlibCanvas()
+        # Plot canvas'lari — modlar arasinda paylasilir, set_figure ile guncellenir
+        self._canvas_main_wf  = MatplotlibCanvas()  # Tek kanal & ana kanal waterfall
+        self._canvas_ref_wf   = MatplotlibCanvas()  # Karsilastirmada referans waterfall
+        self._canvas_ratio_wf = MatplotlibCanvas()  # Karsilastirmada oran waterfall
+        self._canvas_orders   = MatplotlibCanvas()
+        self._canvas_card     = MatplotlibCanvas()
 
-        self._plot_tabs.addTab(self._canvas_waterfall, "🌊  Waterfall")
-        self._plot_tabs.addTab(self._canvas_orders,    "📈  Order Karşılaştırma")
-        self._plot_tabs.addTab(self._canvas_card,      "📋  Tanı Kartı")
+        # Tab indeksleri runtime'da yeniden duzenlenir
+        self._plot_tabs.addTab(self._canvas_main_wf,  "🌊  Waterfall")
+        self._plot_tabs.addTab(self._canvas_orders,   "📊  Order Genlikleri")
 
-        splitter.addWidget(plot_widget)
-
-        # ── Right: diagnosis panel ────────────────────────────────────────
+        # Tani paneli
         diag_scroll = QScrollArea()
         diag_scroll.setWidgetResizable(True)
         diag_scroll.setFrameShape(QFrame.NoFrame)
         self._diag_widget = DiagnosisPanel()
         diag_scroll.setWidget(self._diag_widget)
         splitter.addWidget(diag_scroll)
+        self._diag_scroll = diag_scroll
 
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
 
-        # Internal state
-        self._reports: Dict = {}
-        self._ref_run = None
-        self._current_report = None
+        # Store sinyallerine baglan
+        self._store.channel_added.connect(self._refresh_combos)
+        self._store.channel_removed.connect(self._refresh_combos)
 
-    def show_single(self, report, order_data, ref_order_data, run, ref_run):
-        """Display results for a single engine analysis."""
-        self._reports = {report.engine_id: report}
-        self._ref_run = ref_run
-        self._engine_combo.clear()
-        self._engine_combo.addItem(report.engine_id)
-        self._render_report(report, run, ref_run, order_data, ref_order_data)
+        # Modun varsayilan gorunumu
+        self._on_mode_changed(0, True)
 
-    def show_fleet(self, reports: Dict, ref_run):
-        """Display fleet results — populate engine selector."""
-        self._reports = reports
-        self._ref_run = ref_run
-        self._engine_combo.clear()
-        for eid in sorted(reports.keys()):
-            self._engine_combo.addItem(eid)
+        self._overlay = LoadingOverlay(self)
 
-    def _on_engine_selected(self, eid: str):
-        if not eid or eid not in self._reports:
+    def resizeEvent(self, event):
+        self._overlay.setGeometry(self.rect())
+        super().resizeEvent(event)
+
+    # ── Mod degisimi: tab yerlesimi ve panel gorunurlugu ───────────────────
+    def _on_mode_changed(self, idx: int, checked: bool):
+        if not checked:
             return
-        report = self._reports[eid]
-        # We need to rebuild run/order_data for fleet engines
-        # For now we render diagnosis panel and placeholder plots
-        self._diag_widget.set_report(report)
-        self._render_plots_for_report(report)
+        self._selector_stack.setCurrentIndex(idx)
 
-    def _render_report(self, report, run, ref_run, order_data, ref_order_data):
-        """Full render with actual run data."""
-        self._diag_widget.set_report(report)
-        self._render_plots(report, run, ref_run, order_data, ref_order_data)
+        # Tablari sifirla
+        while self._plot_tabs.count():
+            self._plot_tabs.removeTab(0)
 
-    def _render_plots(self, report, run, ref_run, order_data, ref_order_data):
+        if idx == 0:
+            # Tek kanal: sadece waterfall + order genlikleri (referanssiz)
+            self._plot_tabs.addTab(self._canvas_main_wf, "🌊  Waterfall")
+            self._plot_tabs.addTab(self._canvas_orders,  "📊  Order Genlikleri")
+            self._diag_scroll.setVisible(False)
+        else:
+            # Iki kanal: ana, referans, oran + order karsilastirma + tani karti
+            self._plot_tabs.addTab(self._canvas_main_wf,  "🌊  Waterfall (Ana)")
+            self._plot_tabs.addTab(self._canvas_ref_wf,   "🌊  Waterfall (Referans)")
+            self._plot_tabs.addTab(self._canvas_ratio_wf, "📐  Waterfall Orani (dB)")
+            self._plot_tabs.addTab(self._canvas_orders,   "📈  Order Karsilastirma")
+            self._plot_tabs.addTab(self._canvas_card,     "📋  Tani Karti")
+            self._diag_scroll.setVisible(True)
+
+    # ── Kanal combo'larini guncel tut ─────────────────────────────────────
+    def _refresh_combos(self, *_args):
+        keys = self._store.keys()
+        for combo in (self._single_combo, self._ref_combo, self._main_combo):
+            cur = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(keys)
+            if cur in keys:
+                combo.setCurrentText(cur)
+            combo.blockSignals(False)
+
+    # ── Tek kanal goruntuleme ─────────────────────────────────────────────
+    def _run_single(self):
+        key = self._single_combo.currentText()
+        run = self._store.get(key) if key else None
+        if run is None:
+            QMessageBox.warning(self, "Eksik giris",
+                                "Lutfen once Veri Yonetimi'nden bir kanal yukleyin.")
+            return
+
+        self._worker = SingleChannelWorker(run)
+        self._worker.progress.connect(lambda m: self.log_message.emit(m, "INFO"))
+        self._worker.finished.connect(self._on_single_done)
+        self._worker.error.connect(self._on_worker_error)
+
+        self._single_run_btn.setEnabled(False)
+        self._overlay.show_loading("Goruntuleniyor...", key)
+        self._worker.start()
+
+    def _on_single_done(self, order_data, run):
+        self._overlay.hide_loading()
+        self._single_run_btn.setEnabled(True)
+        self._render_single(run, order_data)
+        self.log_message.emit(f"✓ {run.engine_id} kanal goruntulendi", "SUCCESS")
+
+    def _render_single(self, run, order_data):
         import matplotlib
         matplotlib.use("Agg")
-
-        from plots import plot_waterfall, plot_order_comparison, plot_diagnostic_card
-
-        try:
-            fig_wf  = plot_waterfall(run)
-            self._canvas_waterfall.set_figure(fig_wf)
-        except Exception as e:
-            logger.warning("Waterfall plot error: %s", e)
+        from plots import plot_waterfall, plot_order_comparison
 
         try:
-            fig_ord = plot_order_comparison(order_data, ref_order_data, report.anomalies)
+            fig = plot_waterfall(run)
+            self._canvas_main_wf.set_figure(fig)
+        except Exception as exc:
+            logger.warning("Waterfall plot hatasi: %s", exc)
+
+        # Tek kanal: order genlikleri (referans yok → karsilastirma yapilmaz)
+        try:
+            empty_ref = {}
+            fig_ord = plot_order_comparison(order_data, empty_ref, anomalies=[])
             self._canvas_orders.set_figure(fig_ord)
-        except Exception as e:
-            logger.warning("Order plot error: %s", e)
+        except Exception as exc:
+            logger.warning("Order plot hatasi: %s", exc)
+
+    # ── Iki kanal karsilastirma ───────────────────────────────────────────
+    def _run_compare(self):
+        ref_key  = self._ref_combo.currentText()
+        meas_key = self._main_combo.currentText()
+        ref_run  = self._store.get(ref_key)  if ref_key  else None
+        meas_run = self._store.get(meas_key) if meas_key else None
+
+        if ref_run is None or meas_run is None:
+            QMessageBox.warning(self, "Eksik giris",
+                                "Karsilastirma icin iki kanal secmelisiniz.")
+            return
+        if ref_key == meas_key:
+            QMessageBox.warning(self, "Gecersiz secim",
+                                "Referans ve ana kanal ayni olamaz.")
+            return
+
+        # is_reference bayragini referans olarak kullanilana isaretle
+        ref_run.is_reference = True
+
+        self._worker = CompareChannelsWorker(meas_run, ref_run)
+        self._worker.progress.connect(lambda m: self.log_message.emit(m, "INFO"))
+        self._worker.finished.connect(self._on_compare_done)
+        self._worker.error.connect(self._on_worker_error)
+
+        self._compare_run_btn.setEnabled(False)
+        self._overlay.show_loading("Karsilastirma calistiriliyor...", meas_key)
+        self._worker.start()
+
+    def _on_compare_done(self, report, order_data, ref_order_data, meas_run, ref_run):
+        self._overlay.hide_loading()
+        self._compare_run_btn.setEnabled(True)
+        self._render_compare(report, order_data, ref_order_data, meas_run, ref_run)
+        self.log_message.emit(
+            f"✓ Karsilastirma tamam — Skor {report.overall_health_score:.0f}/100 "
+            f"· {len(report.anomalies)} anomali",
+            "SUCCESS",
+        )
+
+    def _render_compare(self, report, order_data, ref_order_data, meas_run, ref_run):
+        import matplotlib
+        matplotlib.use("Agg")
+        from plots import (plot_waterfall, plot_waterfall_ratio,
+                           plot_order_comparison, plot_diagnostic_card)
+
+        try:
+            fig_main = plot_waterfall(meas_run)
+            self._canvas_main_wf.set_figure(fig_main)
+        except Exception as exc:
+            logger.warning("Ana waterfall hatasi: %s", exc)
+
+        try:
+            fig_ref = plot_waterfall(ref_run)
+            self._canvas_ref_wf.set_figure(fig_ref)
+        except Exception as exc:
+            logger.warning("Ref waterfall hatasi: %s", exc)
+
+        try:
+            fig_ratio = plot_waterfall_ratio(meas_run, ref_run)
+            self._canvas_ratio_wf.set_figure(fig_ratio)
+        except Exception as exc:
+            logger.warning("Oran waterfall hatasi: %s", exc)
+
+        try:
+            fig_ord = plot_order_comparison(order_data, ref_order_data,
+                                            report.anomalies)
+            self._canvas_orders.set_figure(fig_ord)
+        except Exception as exc:
+            logger.warning("Order karsilastirma hatasi: %s", exc)
 
         try:
             fig_card = plot_diagnostic_card(report)
             self._canvas_card.set_figure(fig_card)
-        except Exception as e:
-            logger.warning("Card plot error: %s", e)
+        except Exception as exc:
+            logger.warning("Tani karti hatasi: %s", exc)
 
-    def _render_plots_for_report(self, report):
-        """For fleet: render only the diagnostic card (no raw run data)."""
-        from plots import plot_diagnostic_card
-        try:
-            fig_card = plot_diagnostic_card(report)
-            self._canvas_card.set_figure(fig_card)
-        except Exception as e:
-            logger.warning("Card error: %s", e)
         self._diag_widget.set_report(report)
+
+    def _on_worker_error(self, msg: str):
+        self._overlay.hide_loading()
+        self._single_run_btn.setEnabled(True)
+        self._compare_run_btn.setEnabled(True)
+        self.log_message.emit(f"✕ Hata: {msg.splitlines()[0]}", "ERROR")
+        QMessageBox.critical(self, "Hata", msg[:400])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  DIAGNOSIS PANEL  (right side of results page)
+#  DIAGNOSIS PANEL  (Analiz sayfasinin sag tarafi)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DiagnosisPanel(QWidget):
@@ -682,13 +656,13 @@ class DiagnosisPanel(QWidget):
         layout.setContentsMargins(8, 0, 8, 16)
         layout.setSpacing(16)
 
-        # Health score + summary
-        score_card, score_body = _card("Sağlık Skoru")
+        # Saglik skoru + ozet
+        score_card, score_body = _card("Saglik Skoru")
         score_row = QHBoxLayout()
         self._dial = HealthScoreDial(100)
         score_row.addWidget(self._dial)
         summary_col = QVBoxLayout()
-        self._summary_label = QLabel("Analiz bekleniyor…")
+        self._summary_label = QLabel("Analiz bekleniyor...")
         self._summary_label.setWordWrap(True)
         self._summary_label.setObjectName("fieldLabel")
         summary_col.addWidget(self._summary_label)
@@ -699,9 +673,9 @@ class DiagnosisPanel(QWidget):
         score_body.addLayout(score_row)
         layout.addWidget(score_card)
 
-        # Fault diagnoses table
-        fault_card, fault_body = _card("Teşhis Edilen Arızalar")
-        self._fault_table = _make_table(["Arıza", "Kategori", "Güven", "Severity"])
+        # Teshis tablosu
+        fault_card, fault_body = _card("Teshis Edilen Arizalar")
+        self._fault_table = _make_table(["Ariza", "Kategori", "Guven", "Severity"])
         self._fault_table.setMinimumHeight(140)
         self._fault_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self._fault_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -710,15 +684,15 @@ class DiagnosisPanel(QWidget):
         fault_body.addWidget(self._fault_table)
         layout.addWidget(fault_card)
 
-        # Anomalies table
+        # Anomali tablosu
         anom_card, anom_body = _card("Anomali Listesi")
         self._anom_table = _make_table(["Order", "RPM", "Frekans", "Oran", "Severity"])
         self._anom_table.setMinimumHeight(140)
         anom_body.addWidget(self._anom_table)
         layout.addWidget(anom_card)
 
-        # Recommendations
-        rec_card, rec_body = _card("Öneriler")
+        # Oneriler
+        rec_card, rec_body = _card("Oneriler")
         self._rec_text = QTextEdit()
         self._rec_text.setReadOnly(True)
         self._rec_text.setObjectName("logPanel")
@@ -727,12 +701,10 @@ class DiagnosisPanel(QWidget):
         layout.addWidget(rec_card)
 
     def set_report(self, report) -> None:
-        # Score
         self._dial.set_score(report.overall_health_score)
         self._engine_id_label.setText(report.engine_id)
         self._summary_label.setText(report.summary)
 
-        # Fault table
         self._fault_table.setRowCount(0)
         for d in report.fault_diagnoses:
             row = self._fault_table.rowCount()
@@ -743,7 +715,6 @@ class DiagnosisPanel(QWidget):
             self._fault_table.setItem(row, 2, _table_item(f"{int(d['confidence']*100)}%"))
             self._fault_table.setItem(row, 3, _table_item(d["severity"], color, bold=True))
 
-        # Anomaly table
         self._anom_table.setRowCount(0)
         for a in sorted(report.anomalies, key=lambda x: -x.amplitude_ratio):
             row = self._anom_table.rowCount()
@@ -755,10 +726,8 @@ class DiagnosisPanel(QWidget):
             self._anom_table.setItem(row, 3, _table_item(f"×{a.amplitude_ratio:.2f}", color, bold=True))
             self._anom_table.setItem(row, 4, _table_item(a.severity, color))
 
-        # Recommendations
-        recs = "\n\n".join(
-            f"{'→'} {r}" for r in report.recommendations
-        ) or "Anormallik tespit edilmedi."
+        recs = "\n\n".join(f"→ {r}" for r in report.recommendations) \
+            or "Anormallik tespit edilmedi."
         self._rec_text.setPlainText(recs)
 
 
@@ -777,19 +746,19 @@ class PageEngineConfig(QWidget):
         outer.setSpacing(16)
 
         outer.addWidget(_page_header(
-            "⚙️  Motor Konfigürasyonu",
-            "engine_config.py dosyasındaki motor-spesifik tanımları görüntüleyin.",
+            "⚙️  Motor Konfigurasyonu",
+            "engine_config.py dosyasindaki motor-spesifik tanimlari goruntuleyin.",
         ))
         outer.addWidget(Divider())
 
         tabs = QTabWidget()
         outer.addWidget(tabs, stretch=1)
 
-        # Tab 1: Order Tanımları
+        # Tab 1: Order Tanimlari
         order_widget = QWidget()
         ol = QVBoxLayout(order_widget)
         ol.setContentsMargins(12, 12, 12, 12)
-        order_tbl = _make_table(["Order", "İsim", "Kaynak", "Açıklama", "Arıza Göstergeleri"])
+        order_tbl = _make_table(["Order", "İsim", "Kaynak", "Aciklama", "Ariza Gostergeleri"])
         order_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         order_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         order_tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -818,13 +787,13 @@ class PageEngineConfig(QWidget):
             order_tbl.setItem(row, 4, _table_item(", ".join(odef.fault_indicators[:3])))
 
         ol.addWidget(order_tbl)
-        tabs.addTab(order_widget, "Order Tanımları")
+        tabs.addTab(order_widget, "Order Tanimlari")
 
-        # Tab 2: Arıza İmzaları
+        # Tab 2: Ariza Imzalari
         fault_widget = QWidget()
         fl = QVBoxLayout(fault_widget)
         fl.setContentsMargins(12, 12, 12, 12)
-        fault_tbl = _make_table(["Arıza", "Kategori", "Birincil Orders", "İkincil Orders", "Eşik (×)"])
+        fault_tbl = _make_table(["Ariza", "Kategori", "Birincil Orders", "İkincil Orders", "Esik (×)"])
         fault_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
         from engine_config import FAULT_SIGNATURES
@@ -838,7 +807,7 @@ class PageEngineConfig(QWidget):
             fault_tbl.setItem(row, 4, _table_item(f"×{sig.amplitude_ratio_threshold}"))
 
         fl.addWidget(fault_tbl)
-        tabs.addTab(fault_widget, "Arıza İmzaları")
+        tabs.addTab(fault_widget, "Ariza Imzalari")
 
         # Tab 3: Motor Parametreleri
         param_widget = QWidget()
@@ -846,7 +815,7 @@ class PageEngineConfig(QWidget):
         pl.setContentsMargins(12, 12, 12, 12)
 
         from engine_config import ENGINE_CONFIG
-        param_tbl = _make_table(["Parametre", "Değer"])
+        param_tbl = _make_table(["Parametre", "Deger"])
         param_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         param_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
 
@@ -858,3 +827,43 @@ class PageEngineConfig(QWidget):
 
         pl.addWidget(param_tbl)
         tabs.addTab(param_widget, "Motor Parametreleri")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE: LOG  (genel uygulama logu)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PageLog(QWidget):
+    """Tum sayfalardan gelen log mesajlarini gosteren basit sayfa."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("pageContent")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(16)
+
+        outer.addWidget(_page_header(
+            "📋  Log",
+            "Veri yukleme ve analiz islemlerinin gunlugunu burada gorebilirsiniz.",
+        ))
+        outer.addWidget(Divider())
+
+        log_card, log_body = _card("Uygulama Gunlugu")
+        toolbar = QHBoxLayout()
+        toolbar.addStretch()
+        self._clear_btn = QPushButton("🗑  Temizle")
+        self._clear_btn.setObjectName("btnBrowse")
+        toolbar.addWidget(self._clear_btn)
+        log_body.addLayout(toolbar)
+
+        self._log = LogPanel()
+        self._log.setMinimumHeight(400)
+        log_body.addWidget(self._log, stretch=1)
+        outer.addWidget(log_card, stretch=1)
+
+        self._clear_btn.clicked.connect(self._log.clear)
+
+    def append(self, msg: str, level: str = "INFO") -> None:
+        self._log.append_log(msg, level)

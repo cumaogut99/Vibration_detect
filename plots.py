@@ -141,6 +141,102 @@ def plot_waterfall(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  WATERFALL RATIO PLOT  (main / reference)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_waterfall_ratio(
+    meas_run: EngineRun,
+    ref_run: EngineRun,
+    title: str = "",
+    freq_max: float = 3000.0,
+    annotate_orders: bool = True,
+) -> Figure:
+    """Iki kanal arasi waterfall oranini (dB) cizen 2D color-map.
+
+    Olcum amplitudleri referansa orana cevrilir ve 20*log10 alinarak dB
+    cinsine donusturulur. Pozitif degerler (kirmizi) olcumun referanstan
+    yuksek oldugunu, negatif degerler (mavi) referansin daha yuksek
+    oldugunu gosterir.
+    """
+    freq_mask = meas_run.frequencies <= freq_max
+    freqs = meas_run.frequencies[freq_mask]
+    meas_amps = meas_run.amplitudes[:, freq_mask]
+
+    # Resample reference onto measurement (rpm, freq) grid via 2D interp
+    from scipy.interpolate import RegularGridInterpolator
+    ref_freqs = ref_run.frequencies
+    ref_rpms  = ref_run.rpm_values
+    ref_amps_full = ref_run.amplitudes
+
+    # Ensure monotonic ascending
+    if ref_rpms[0] > ref_rpms[-1]:
+        ref_rpms = ref_rpms[::-1]
+        ref_amps_full = ref_amps_full[::-1, :]
+
+    floor = 1e-12
+    interp = RegularGridInterpolator(
+        (ref_rpms, ref_freqs),
+        np.maximum(ref_amps_full, floor),
+        method="linear",
+        bounds_error=False,
+        fill_value=None,  # extrapolate
+    )
+
+    F, R = np.meshgrid(freqs, meas_run.rpm_values)
+    points = np.stack([R.ravel(), F.ravel()], axis=1)
+    ref_at_meas = interp(points).reshape(F.shape)
+    ref_at_meas = np.maximum(ref_at_meas, floor)
+
+    ratio_db = 20 * np.log10(np.maximum(meas_amps, floor) / ref_at_meas)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    _apply_theme(fig, ax)
+
+    vlim = float(np.nanpercentile(np.abs(ratio_db), 98))
+    vlim = max(vlim, 1.0)
+
+    mesh = ax.pcolormesh(
+        F, R, ratio_db,
+        cmap="RdBu_r",
+        vmin=-vlim, vmax=+vlim,
+        shading="auto",
+        rasterized=True,
+    )
+    cbar = fig.colorbar(mesh, ax=ax, pad=0.01)
+    cbar.set_label("Olcum / Referans  (dB)",
+                   color=THEME["text_muted"], fontsize=8)
+    cbar.ax.tick_params(colors=THEME["text_muted"])
+    cbar.outline.set_edgecolor(THEME["border"])
+
+    if annotate_orders:
+        rpm_range = meas_run.rpm_values
+        for order, odef in ORDER_DEFINITIONS.items():
+            order_freqs = order * rpm_range / 60.0
+            color = CATEGORY_COLORS.get(odef.category, THEME["text_muted"])
+            ax.plot(order_freqs, rpm_range, "--", color=color,
+                    linewidth=0.5, alpha=0.45)
+            label_freq = order * rpm_range[-1] / 60.0
+            if label_freq <= freq_max:
+                ax.text(
+                    label_freq, rpm_range[-1] * 1.001,
+                    f"{order}×",
+                    color=color, fontsize=6, ha="center", va="bottom",
+                    alpha=0.75,
+                )
+
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("RPM")
+    ax.set_title(
+        title or
+        f"Waterfall Orani (dB)  ·  {meas_run.engine_id} / {ref_run.engine_id}",
+        fontsize=10, pad=8,
+    )
+    ax.set_xlim(0, freq_max)
+    fig.tight_layout()
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  ORDER TRACKING COMPARISON PLOT
 # ─────────────────────────────────────────────────────────────────────────────
 

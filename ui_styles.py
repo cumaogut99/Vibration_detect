@@ -64,14 +64,10 @@ QScrollBar::handle:horizontal {
 QScrollBar::handle:horizontal:hover { background: #58a6ff; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 
-/* ─── Sidebar ─────────────────────────────────────────────── */
-QWidget#sidebar {
+/* ─── Top Tab Bar ─────────────────────────────────────────── */
+QFrame#topTabBar {
     background-color: #0d1117;
-    border-right: 1px solid #21262d;
-}
-
-QFrame#sidebarTitle {
-    background-color: #0d1117;
+    border-bottom: 1px solid #21262d;
 }
 
 QLabel#logoLabel {
@@ -81,45 +77,32 @@ QLabel#logoLabel {
     letter-spacing: 0.5px;
 }
 
-QLabel#logoSub {
-    font-size: 10px;
-    color: #8b949e;
-    letter-spacing: 0.3px;
-}
-
-QLabel#navSection {
-    font-size: 10px;
-    font-weight: 600;
-    color: #8b949e;
-    letter-spacing: 1.2px;
-    padding: 10px 0 4px 0;
-}
-
 QLabel#sidebarVer {
     font-size: 10px;
     color: #30363d;
+    padding-right: 4px;
 }
 
-/* ─── Nav Buttons ─────────────────────────────────────────── */
-QPushButton#navBtn {
+QPushButton#topTabBtn {
     background: transparent;
     border: none;
+    border-bottom: 3px solid transparent;
     border-radius: 0;
-    text-align: left;
-    padding: 10px 20px;
+    text-align: center;
+    padding: 12px 22px;
     font-size: 13px;
     color: #8b949e;
-    border-left: 3px solid transparent;
+    min-height: 36px;
 }
-QPushButton#navBtn:hover {
-    background: #161b22;
+QPushButton#topTabBtn:hover {
     color: #e6edf3;
-}
-QPushButton#navBtn[active="true"] {
     background: #161b22;
+}
+QPushButton#topTabBtn[active="true"] {
     color: #58a6ff;
-    border-left: 3px solid #58a6ff;
-    font-weight: 600;
+    border-bottom: 3px solid #58a6ff;
+    font-weight: 700;
+    background: #161b22;
 }
 
 /* ─── Content Pages ───────────────────────────────────────── */

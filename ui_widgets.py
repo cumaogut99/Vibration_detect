@@ -12,8 +12,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QSizePolicy, QPlainTextEdit, QProgressBar,
     QGraphicsOpacityEffect,
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, Signal
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, Signal, QObject
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
+
+from models import EngineRun
 
 logger = logging.getLogger(__name__)
 
@@ -409,3 +411,75 @@ class MatplotlibCanvas(QWidget):
         if self._placeholder:
             self._placeholder.show()
             self._layout.addWidget(self._placeholder)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  CHANNEL STORE (global olarak yuklenmis kanallari tutar)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ChannelStore(QObject):
+    """Yuklenmis tum kanallari merkezi olarak yonetir.
+
+    Anahtar formati: "<engine_id>  ·  <sensor_location>/<axis>  ·  <run_id>"
+    """
+
+    channel_added   = Signal(str, object)   # key, EngineRun
+    channel_removed = Signal(str)           # key
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._channels: dict[str, EngineRun] = {}
+
+    @staticmethod
+    def make_key(run: EngineRun) -> str:
+        return f"{run.engine_id}  ·  {run.sensor_location}/{run.axis}  ·  {run.run_id}"
+
+    def add(self, run: EngineRun) -> str:
+        key  = self.make_key(run)
+        base = key
+        n = 2
+        while key in self._channels:
+            key = f"{base}  (#{n})"
+            n += 1
+        self._channels[key] = run
+        self.channel_added.emit(key, run)
+        return key
+
+    def remove(self, key: str) -> None:
+        if key in self._channels:
+            del self._channels[key]
+            self.channel_removed.emit(key)
+
+    def get(self, key: str) -> Optional[EngineRun]:
+        return self._channels.get(key)
+
+    def keys(self) -> list[str]:
+        return list(self._channels.keys())
+
+    def items(self):
+        return self._channels.items()
+
+    def __len__(self) -> int:
+        return len(self._channels)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TAB BAR  (ust sekme cubugu — gorsel olarak kuvvetli)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TopTabButton(QPushButton):
+    """Ust sekme cubugundaki tek bir sekme dugmesi."""
+
+    def __init__(self, label: str, page_index: int, parent=None):
+        super().__init__(label, parent)
+        self.page_index = page_index
+        self.setObjectName("topTabBtn")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setCheckable(False)
+        self._active = False
+
+    def setActive(self, active: bool) -> None:
+        self._active = active
+        self.setProperty("active", "true" if active else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
