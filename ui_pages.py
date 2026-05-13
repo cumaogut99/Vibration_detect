@@ -355,28 +355,24 @@ class PageAnalysis(QWidget):
         sep.setStyleSheet("color:#30363d;")
         top_row.addWidget(sep)
 
-        # Motor combo (her iki modda ortak — kanallari filtreler)
-        lbl_motor = QLabel("Motor:")
-        lbl_motor.setObjectName("fieldLabel")
-        top_row.addWidget(lbl_motor)
-        self._motor_combo = QComboBox()
-        self._motor_combo.setMinimumWidth(140)
-        self._motor_combo.setMaximumWidth(180)
-        self._motor_combo.currentTextChanged.connect(self._on_motor_changed)
-        top_row.addWidget(self._motor_combo)
-
-        # Kanal seciciler — modlara gore birden fazla
+        # Modlara gore farkli secici grubu
         self._selector_stack = QStackedWidget()
         top_row.addWidget(self._selector_stack, stretch=1)
 
-        # Tek kanal seciciyi sar
+        # ── Tek kanal modu: Motor + Kanal ───────────────────────────────
         single_wrap = QWidget()
         sw_l = QHBoxLayout(single_wrap)
         sw_l.setContentsMargins(0, 0, 0, 0)
         sw_l.setSpacing(8)
-        lbl_s = QLabel("Kanal:")
-        lbl_s.setObjectName("fieldLabel")
-        sw_l.addWidget(lbl_s)
+
+        sw_l.addWidget(self._mklabel("Motor:"))
+        self._single_motor = QComboBox()
+        self._single_motor.setMinimumWidth(120)
+        self._single_motor.setMaximumWidth(160)
+        self._single_motor.currentTextChanged.connect(self._on_single_motor_changed)
+        sw_l.addWidget(self._single_motor)
+
+        sw_l.addWidget(self._mklabel("Kanal:"))
         self._single_combo = QComboBox()
         self._single_combo.setMinimumWidth(220)
         self._single_combo.setMaximumWidth(320)
@@ -384,24 +380,42 @@ class PageAnalysis(QWidget):
         sw_l.addStretch()
         self._selector_stack.addWidget(single_wrap)
 
-        # Iki kanal secicileri sar (yan yana)
+        # ── Karsilastirma modu: Ref Motor + Ref Kanal | Ana Motor + Ana Kanal
         compare_wrap = QWidget()
         cw_l = QHBoxLayout(compare_wrap)
         cw_l.setContentsMargins(0, 0, 0, 0)
         cw_l.setSpacing(8)
-        lbl_r = QLabel("Referans:")
-        lbl_r.setObjectName("fieldLabel")
-        cw_l.addWidget(lbl_r)
+
+        cw_l.addWidget(self._mklabel("Ref Motor:"))
+        self._ref_motor = QComboBox()
+        self._ref_motor.setMinimumWidth(110)
+        self._ref_motor.setMaximumWidth(150)
+        self._ref_motor.currentTextChanged.connect(self._on_ref_motor_changed)
+        cw_l.addWidget(self._ref_motor)
+
+        cw_l.addWidget(self._mklabel("Ref Kanal:"))
         self._ref_combo = QComboBox()
-        self._ref_combo.setMinimumWidth(200)
-        self._ref_combo.setMaximumWidth(280)
+        self._ref_combo.setMinimumWidth(180)
+        self._ref_combo.setMaximumWidth(240)
         cw_l.addWidget(self._ref_combo)
-        lbl_m = QLabel("Ana:")
-        lbl_m.setObjectName("fieldLabel")
-        cw_l.addWidget(lbl_m)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setFixedHeight(28)
+        sep2.setStyleSheet("color:#30363d;")
+        cw_l.addWidget(sep2)
+
+        cw_l.addWidget(self._mklabel("Ana Motor:"))
+        self._main_motor = QComboBox()
+        self._main_motor.setMinimumWidth(110)
+        self._main_motor.setMaximumWidth(150)
+        self._main_motor.currentTextChanged.connect(self._on_main_motor_changed)
+        cw_l.addWidget(self._main_motor)
+
+        cw_l.addWidget(self._mklabel("Ana Kanal:"))
         self._main_combo = QComboBox()
-        self._main_combo.setMinimumWidth(200)
-        self._main_combo.setMaximumWidth(280)
+        self._main_combo.setMinimumWidth(180)
+        self._main_combo.setMaximumWidth(240)
         cw_l.addWidget(self._main_combo)
         cw_l.addStretch()
         self._selector_stack.addWidget(compare_wrap)
@@ -491,34 +505,48 @@ class PageAnalysis(QWidget):
             self._diag_scroll.setVisible(True)
 
     # ── Motor & kanal combo'lari guncel tut ───────────────────────────────
+    @staticmethod
+    def _mklabel(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("fieldLabel")
+        return lbl
+
     def _refresh_combos(self, *_args):
-        # Motor listesi — store'daki tum kanallardan distinct engine_id
+        """Store icerigi degisince tum motor + kanal combo'lari guncellenir."""
         engines = sorted({r.engine_id for _, r in self._store.items()})
-        cur_motor = self._motor_combo.currentText()
-        self._motor_combo.blockSignals(True)
-        self._motor_combo.clear()
-        self._motor_combo.addItems(engines)
-        if cur_motor in engines:
-            self._motor_combo.setCurrentText(cur_motor)
-        self._motor_combo.blockSignals(False)
-
-        # Bunlar motor seciminden filtrelenir
-        self._refresh_channel_combos()
-
-    def _on_motor_changed(self, _text: str):
-        self._refresh_channel_combos()
-
-    def _refresh_channel_combos(self):
-        motor = self._motor_combo.currentText()
-        keys = [k for k, r in self._store.items() if r.engine_id == motor]
-        for combo in (self._single_combo, self._ref_combo, self._main_combo):
+        for combo in (self._single_motor, self._ref_motor, self._main_motor):
             cur = combo.currentText()
             combo.blockSignals(True)
             combo.clear()
-            combo.addItems(keys)
-            if cur in keys:
+            combo.addItems(engines)
+            if cur in engines:
                 combo.setCurrentText(cur)
             combo.blockSignals(False)
+
+        self._refresh_channel_combo(self._single_motor, self._single_combo)
+        self._refresh_channel_combo(self._ref_motor,    self._ref_combo)
+        self._refresh_channel_combo(self._main_motor,   self._main_combo)
+
+    def _refresh_channel_combo(self, motor_combo: QComboBox,
+                               channel_combo: QComboBox):
+        motor = motor_combo.currentText()
+        keys = [k for k, r in self._store.items() if r.engine_id == motor]
+        cur = channel_combo.currentText()
+        channel_combo.blockSignals(True)
+        channel_combo.clear()
+        channel_combo.addItems(keys)
+        if cur in keys:
+            channel_combo.setCurrentText(cur)
+        channel_combo.blockSignals(False)
+
+    def _on_single_motor_changed(self, _text: str):
+        self._refresh_channel_combo(self._single_motor, self._single_combo)
+
+    def _on_ref_motor_changed(self, _text: str):
+        self._refresh_channel_combo(self._ref_motor, self._ref_combo)
+
+    def _on_main_motor_changed(self, _text: str):
+        self._refresh_channel_combo(self._main_motor, self._main_combo)
 
     # ── Tek kanal goruntuleme ─────────────────────────────────────────────
     def _run_single(self):
