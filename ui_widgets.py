@@ -387,6 +387,7 @@ class MatplotlibCanvas(QWidget):
 
         self._canvas = None
         self._toolbar = None
+        self._figure = None
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -402,6 +403,15 @@ class MatplotlibCanvas(QWidget):
         else:
             self._scroll = None
 
+        self._install_placeholder()
+
+    def _install_placeholder(self) -> None:
+        """Yer tutucu QLabel'i (yeniden) olusturup gosterir.
+
+        QScrollArea.setWidget ve QLayout.removeWidget cagrildiginda eski
+        QLabel C++ tarafinda silinebildigi icin her seferinde yeni bir
+        QLabel olusturmak en guvenlisi.
+        """
         self._placeholder = QLabel(
             "Henüz grafik yok.\nAnaliz çalıştırıldıktan sonra burada görüntülenecek."
         )
@@ -417,12 +427,11 @@ class MatplotlibCanvas(QWidget):
             FigureCanvasQTAgg, NavigationToolbar2QT,
         )
 
+        # Onceki canvas + figure'i kapat → matplotlib figure sizintisi olmasin
         self._drop_canvas()
-        if self._placeholder is not None:
-            self._placeholder.hide()
-            if self._scroll is None:
-                self._layout.removeWidget(self._placeholder)
+        self._drop_placeholder()
 
+        self._figure = fig
         self._canvas = FigureCanvasQTAgg(fig)
         if self._scroll is not None:
             w, h = fig.get_size_inches()
@@ -444,25 +453,49 @@ class MatplotlibCanvas(QWidget):
 
     def clear(self) -> None:
         self._drop_canvas()
-        if self._placeholder is not None:
-            self._placeholder.show()
-            if self._scroll is not None:
-                self._scroll.setWidget(self._placeholder)
+        self._install_placeholder()
+
+    def _drop_placeholder(self) -> None:
+        """Placeholder QLabel'i kaldir; C++ tarafinda silinmis olabilir."""
+        ph = self._placeholder
+        self._placeholder = None
+        if ph is None:
+            return
+        try:
+            if self._scroll is not None and self._scroll.widget() is ph:
+                self._scroll.takeWidget()
             else:
-                self._layout.addWidget(self._placeholder)
+                self._layout.removeWidget(ph)
+            ph.deleteLater()
+        except RuntimeError:
+            # Zaten silinmis (qt C++ taraf objesi yok)
+            pass
 
     def _drop_canvas(self) -> None:
         if self._toolbar is not None:
-            self._layout.removeWidget(self._toolbar)
-            self._toolbar.deleteLater()
+            try:
+                self._layout.removeWidget(self._toolbar)
+                self._toolbar.deleteLater()
+            except RuntimeError:
+                pass
             self._toolbar = None
         if self._canvas is not None:
-            if self._scroll is not None:
-                self._scroll.takeWidget()
-            else:
-                self._layout.removeWidget(self._canvas)
-            self._canvas.deleteLater()
+            try:
+                if self._scroll is not None:
+                    self._scroll.takeWidget()
+                else:
+                    self._layout.removeWidget(self._canvas)
+                self._canvas.deleteLater()
+            except RuntimeError:
+                pass
             self._canvas = None
+        if self._figure is not None:
+            try:
+                import matplotlib.pyplot as plt
+                plt.close(self._figure)
+            except Exception:
+                pass
+            self._figure = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
