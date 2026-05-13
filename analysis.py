@@ -71,14 +71,22 @@ class OrderExtractor:
         else:
             return self._extract_from_waterfall(run, orders)
 
+    def _tol_for(self, order: float) -> float:
+        """OrderDefinition.tolerance_override varsa onu, yoksa varsayılanı döndürür."""
+        odef = ORDER_DEFINITIONS.get(order)
+        if odef is not None and odef.tolerance_override is not None:
+            return float(odef.tolerance_override)
+        return self._tolerance
+
     def _extract_from_order_tracking(
         self, run: EngineRun, orders: List[float]
     ) -> Dict[float, OrderAmplitude]:
         result: Dict[float, OrderAmplitude] = {}
         for order in orders:
+            tol = self._tol_for(order)
             # Find closest order in the data
             idx = np.argmin(np.abs(run.orders - order))
-            if abs(run.orders[idx] - order) / max(order, 1e-9) > self._tolerance:
+            if abs(run.orders[idx] - order) / max(order, 1e-9) > tol:
                 logger.debug("Order %.2f not found in order-tracking data (closest: %.2f)", order, run.orders[idx])
                 continue
             amps = run.order_amplitudes[:, idx]
@@ -98,24 +106,29 @@ class OrderExtractor:
         result: Dict[float, OrderAmplitude] = {}
         shaft_hz = run.rpm_values / 60.0  # (n_slices,)
 
-        # Compute absolute minimum tolerance: at least 1 frequency bin wide
         if len(run.frequencies) > 1:
-            min_bin_hz = float(run.frequencies[1] - run.frequencies[0])
+            bin_hz = float(run.frequencies[1] - run.frequencies[0])
         else:
-            min_bin_hz = 1.0
+            bin_hz = 1.0
 
         for order in orders:
+            tol = self._tol_for(order)
             order_amps = np.zeros(run.n_slices)
             for i, (shaft_f, row_amps) in enumerate(zip(shaft_hz, run.amplitudes)):
                 target_hz = order * shaft_f
-                rel_tol = target_hz * self._tolerance
-                # Always use at least 1.5 bins to guarantee a hit
-                abs_tol = max(rel_tol, min_bin_hz * 1.5)
+                abs_tol = target_hz * tol
                 mask = np.abs(run.frequencies - target_hz) <= abs_tol
                 if mask.any():
                     order_amps[i] = float(row_amps[mask].max())
                 else:
-                    order_amps[i] = 0.0
+                    # Tight-tolerance + low frequency: fall back to nearest bin
+                    # so the order isn't all-zero. Bleed is still bounded by
+                    # half the bin width.
+                    nearest_idx = int(np.argmin(np.abs(run.frequencies - target_hz)))
+                    if abs(run.frequencies[nearest_idx] - target_hz) <= bin_hz:
+                        order_amps[i] = float(row_amps[nearest_idx])
+                    else:
+                        order_amps[i] = 0.0
 
             result[order] = OrderAmplitude(
                 order=order,
@@ -169,10 +182,11 @@ class OrderAmplitudeAnomalyDetector(BaseAnomalyDetector):
                 ref.rpm_values, ref.amplitudes, measured.rpm_values
             )
 
-            ratio = np.where(
-                ref_amps_interp > 1e-12,
-                measured.amplitudes / ref_amps_interp,
-                1.0,
+            mask = ref_amps_interp > 1e-12
+            ratio = np.ones_like(measured.amplitudes)
+            np.divide(
+                measured.amplitudes, ref_amps_interp,
+                out=ratio, where=mask,
             )
 
             # Find RPM points where ratio exceeds threshold
@@ -429,22 +443,27 @@ class VibrationAnalyzer:
         order_data = self._extractor.extract(run, orders_to_analyze)
         ref_order_data = self._extractor.extract(reference, orders_to_analyze)
 
-        # Attach reference amplitudes to order data for downstream use
+        # Attach reference amplitudes + amplitude ratios to each OrderAmplitude.
+        # The ratio is only sensible where the reference is non-zero; np.divide
+        # with where= avoids the divide-by-zero RuntimeWarning.
         for order, oa in order_data.items():
-            if order in ref_order_data:
-                ref = ref_order_data[order]
-                f = interp1d(
-                    ref.rpm_values, ref.amplitudes,
-                    kind="linear", bounds_error=False,
-                    fill_value=(ref.amplitudes[0] if len(ref.amplitudes) else 0.0,
-                                ref.amplitudes[-1] if len(ref.amplitudes) else 0.0),
-                )
-                oa.reference_amplitudes = f(oa.rpm_values)
-        oa.amplitude_ratio = np.where(
-                    np.abs(oa.reference_amplitudes) > 1e-10,
-                    oa.amplitudes / oa.reference_amplitudes,
-                    1.0,
-                )
+            if order not in ref_order_data:
+                continue
+            ref = ref_order_data[order]
+            interp = interp1d(
+                ref.rpm_values, ref.amplitudes,
+                kind="linear", bounds_error=False,
+                fill_value=(ref.amplitudes[0] if len(ref.amplitudes) else 0.0,
+                            ref.amplitudes[-1] if len(ref.amplitudes) else 0.0),
+            )
+            oa.reference_amplitudes = interp(oa.rpm_values)
+            mask = np.abs(oa.reference_amplitudes) > 1e-10
+            ratio = np.ones_like(oa.amplitudes)
+            np.divide(
+                oa.amplitudes, oa.reference_amplitudes,
+                out=ratio, where=mask,
+            )
+            oa.amplitude_ratio = ratio
 
         all_anomalies: List[AnomalyFlag] = []
         for detector in self._detectors:

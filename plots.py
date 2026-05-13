@@ -56,6 +56,8 @@ CATEGORY_COLORS = {
     FaultCategory.MISALIGNMENT: "#d29922",
     FaultCategory.VALVE: "#f78166",
     FaultCategory.STRUCTURAL: "#8b949e",
+    FaultCategory.PROPELLER: "#bc8cff",
+    FaultCategory.MOUNT: "#d29922",
 }
 
 
@@ -83,48 +85,73 @@ def _apply_theme(fig: Figure, axes=None) -> None:
 def plot_waterfall(
     run: EngineRun,
     title: str = "",
+    freq_min: float = 0.0,
     freq_max: float = 3000.0,
+    rpm_min: Optional[float] = None,
+    rpm_max: Optional[float] = None,
     annotate_orders: bool = True,
 ) -> Figure:
-    """2D color-map waterfall: X=frequency, Y=RPM, color=amplitude."""
-    freq_mask = run.frequencies <= freq_max
-    freqs = run.frequencies[freq_mask]
-    amps = run.amplitudes[:, freq_mask]
+    """
+    2D color-map waterfall: X=frequency, Y=RPM, amplitude in **linear g**
+    with logarithmic color normalization (LogNorm) so wide dynamic ranges
+    stay visible without compressing details into a 0-1 dB strip.
+    """
+    f_lo, f_hi = float(freq_min), float(freq_max)
+    if f_hi <= f_lo:
+        f_hi = float(run.frequencies.max())
 
-    # dB conversion (add small floor to avoid log(0))
-    amps_db = 20 * np.log10(np.maximum(amps, 1e-12))
+    r_lo = float(rpm_min) if rpm_min is not None else float(run.rpm_values.min())
+    r_hi = float(rpm_max) if rpm_max is not None else float(run.rpm_values.max())
+
+    freq_mask = (run.frequencies >= f_lo) & (run.frequencies <= f_hi)
+    rpm_mask  = (run.rpm_values >= r_lo) & (run.rpm_values <= r_hi)
+    freqs = run.frequencies[freq_mask]
+    rpms  = run.rpm_values[rpm_mask]
+    amps  = run.amplitudes[np.ix_(rpm_mask, freq_mask)]
+
+    if amps.size == 0:
+        amps  = run.amplitudes[:, :1]
+        freqs = run.frequencies[:1]
+        rpms  = run.rpm_values
 
     fig, ax = plt.subplots(figsize=(12, 6))
     _apply_theme(fig, ax)
 
-    # Meshgrid for pcolormesh
-    F, R = np.meshgrid(freqs, run.rpm_values)
-    vmin, vmax = np.percentile(amps_db, [5, 99])
+    # LogNorm needs strictly positive amps; clamp the floor at 1% of the
+    # 99th percentile so noise stays visible without saturating zeros.
+    finite = amps[np.isfinite(amps) & (amps > 0)]
+    if finite.size:
+        vmax = float(np.percentile(finite, 99.5))
+        vmin = max(float(np.percentile(finite, 5)), vmax * 1e-4, 1e-12)
+    else:
+        vmin, vmax = 1e-6, 1.0
+    amps_clamped = np.maximum(amps, vmin)
 
+    F, R = np.meshgrid(freqs, rpms)
     mesh = ax.pcolormesh(
-        F, R, amps_db,
+        F, R, amps_clamped,
         cmap=THEME["colormap"],
-        vmin=vmin, vmax=vmax,
+        norm=mcolors.LogNorm(vmin=vmin, vmax=vmax),
         shading="auto",
         rasterized=True,
     )
     cbar = fig.colorbar(mesh, ax=ax, pad=0.01)
-    cbar.set_label("Amplitude (dB)", color=THEME["text_muted"], fontsize=8)
+    cbar.set_label("Amplitude (g, log scale)", color=THEME["text_muted"], fontsize=8)
     cbar.ax.tick_params(colors=THEME["text_muted"])
     cbar.outline.set_edgecolor(THEME["border"])
 
-    # Overlay order lines
-    if annotate_orders:
-        rpm_range = run.rpm_values
+    # Overlay order lines (only within the visible RPM band)
+    if annotate_orders and len(rpms):
         for order, odef in ORDER_DEFINITIONS.items():
-            order_freqs = order * rpm_range / 60.0
+            order_freqs = order * rpms / 60.0
             color = CATEGORY_COLORS.get(odef.category, THEME["text_muted"])
-            ax.plot(order_freqs, rpm_range, "--", color=color, linewidth=0.6, alpha=0.55)
-            # Label at top of chart
-            label_freq = order * run.rpm_values[-1] / 60.0
-            if label_freq <= freq_max:
+            if order_freqs.min() > f_hi or order_freqs.max() < f_lo:
+                continue
+            ax.plot(order_freqs, rpms, "--", color=color, linewidth=0.6, alpha=0.55)
+            label_freq = order * rpms[-1] / 60.0
+            if f_lo <= label_freq <= f_hi:
                 ax.text(
-                    label_freq, run.rpm_values[-1] * 1.001,
+                    label_freq, rpms[-1] * 1.001,
                     f"{order}×",
                     color=color, fontsize=6, ha="center", va="bottom", alpha=0.8,
                 )
@@ -135,7 +162,8 @@ def plot_waterfall(
         title or f"FFT Waterfall — {run.engine_id} / {run.sensor_location}",
         fontsize=10, pad=8,
     )
-    ax.set_xlim(0, freq_max)
+    ax.set_xlim(f_lo, f_hi)
+    ax.set_ylim(r_lo, r_hi)
     fig.tight_layout()
     return fig
 
@@ -148,7 +176,10 @@ def plot_waterfall_ratio(
     meas_run: EngineRun,
     ref_run: EngineRun,
     title: str = "",
+    freq_min: float = 0.0,
     freq_max: float = 3000.0,
+    rpm_min: Optional[float] = None,
+    rpm_max: Optional[float] = None,
     annotate_orders: bool = True,
 ) -> Figure:
     """Iki kanal arasi waterfall oranini (dB) cizen 2D color-map.
@@ -158,9 +189,18 @@ def plot_waterfall_ratio(
     yuksek oldugunu, negatif degerler (mavi) referansin daha yuksek
     oldugunu gosterir.
     """
-    freq_mask = meas_run.frequencies <= freq_max
+    f_lo, f_hi = float(freq_min), float(freq_max)
+    if f_hi <= f_lo:
+        f_hi = float(meas_run.frequencies.max())
+
+    r_lo = float(rpm_min) if rpm_min is not None else float(meas_run.rpm_values.min())
+    r_hi = float(rpm_max) if rpm_max is not None else float(meas_run.rpm_values.max())
+
+    freq_mask = (meas_run.frequencies >= f_lo) & (meas_run.frequencies <= f_hi)
+    rpm_mask  = (meas_run.rpm_values >= r_lo) & (meas_run.rpm_values <= r_hi)
     freqs = meas_run.frequencies[freq_mask]
-    meas_amps = meas_run.amplitudes[:, freq_mask]
+    rpms  = meas_run.rpm_values[rpm_mask]
+    meas_amps = meas_run.amplitudes[np.ix_(rpm_mask, freq_mask)]
 
     # Resample reference onto measurement (rpm, freq) grid via 2D interp
     from scipy.interpolate import RegularGridInterpolator
@@ -182,7 +222,7 @@ def plot_waterfall_ratio(
         fill_value=None,  # extrapolate
     )
 
-    F, R = np.meshgrid(freqs, meas_run.rpm_values)
+    F, R = np.meshgrid(freqs, rpms)
     points = np.stack([R.ravel(), F.ravel()], axis=1)
     ref_at_meas = interp(points).reshape(F.shape)
     ref_at_meas = np.maximum(ref_at_meas, floor)
@@ -208,17 +248,18 @@ def plot_waterfall_ratio(
     cbar.ax.tick_params(colors=THEME["text_muted"])
     cbar.outline.set_edgecolor(THEME["border"])
 
-    if annotate_orders:
-        rpm_range = meas_run.rpm_values
+    if annotate_orders and len(rpms):
         for order, odef in ORDER_DEFINITIONS.items():
-            order_freqs = order * rpm_range / 60.0
+            order_freqs = order * rpms / 60.0
             color = CATEGORY_COLORS.get(odef.category, THEME["text_muted"])
-            ax.plot(order_freqs, rpm_range, "--", color=color,
+            if order_freqs.min() > f_hi or order_freqs.max() < f_lo:
+                continue
+            ax.plot(order_freqs, rpms, "--", color=color,
                     linewidth=0.5, alpha=0.45)
-            label_freq = order * rpm_range[-1] / 60.0
-            if label_freq <= freq_max:
+            label_freq = order * rpms[-1] / 60.0
+            if f_lo <= label_freq <= f_hi:
                 ax.text(
-                    label_freq, rpm_range[-1] * 1.001,
+                    label_freq, rpms[-1] * 1.001,
                     f"{order}×",
                     color=color, fontsize=6, ha="center", va="bottom",
                     alpha=0.75,
@@ -260,7 +301,14 @@ def plot_order_comparison(
 
     n = len(orders_to_plot)
     rows = (n + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 2.8))
+    # Each subplot ~5.5"x3.6" so labels, legends and ratio annotations stay
+    # legible even when 18+ orders are shown. The host widget is expected to
+    # wrap the canvas in a scroll area when the figure is taller than the page.
+    fig, axes = plt.subplots(
+        rows, cols,
+        figsize=(cols * 5.5, max(rows * 3.6, 3.0)),
+        squeeze=False,
+    )
     fig.patch.set_facecolor(THEME["bg"])
 
     axes_flat = np.array(axes).flatten()

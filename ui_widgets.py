@@ -369,48 +369,196 @@ class LogPanel(QPlainTextEdit):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MatplotlibCanvas(QWidget):
-    """Embed a matplotlib Figure inside a PySide6 widget."""
+    """
+    Embed a matplotlib Figure inside a PySide6 widget.
 
-    def __init__(self, parent=None):
+    Args:
+        show_toolbar: Add a Matplotlib NavigationToolbar (pan / zoom / save).
+        scrollable:   Wrap the canvas in a QScrollArea so tall figures
+                      (e.g. order-comparison grids) become scrollable
+                      instead of getting squished into the page.
+    """
+
+    def __init__(self, parent=None, show_toolbar: bool = False,
+                 scrollable: bool = False):
         super().__init__(parent)
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-        from matplotlib.figure import Figure
+        self._show_toolbar = show_toolbar
+        self._scrollable   = scrollable
 
-        self._canvas: Optional[FigureCanvasQTAgg] = None
+        self._canvas = None
+        self._toolbar = None
+
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
 
-        self._placeholder = QLabel("Henüz grafik yok.\nAnaliz çalıştırıldıktan sonra burada görüntülenecek.")
+        if scrollable:
+            from PySide6.QtWidgets import QScrollArea
+            self._scroll = QScrollArea()
+            self._scroll.setWidgetResizable(False)
+            self._scroll.setFrameShape(QFrame.NoFrame)
+            self._scroll.setStyleSheet("background: transparent;")
+            self._layout.addWidget(self._scroll, stretch=1)
+        else:
+            self._scroll = None
+
+        self._placeholder = QLabel(
+            "Henüz grafik yok.\nAnaliz çalıştırıldıktan sonra burada görüntülenecek."
+        )
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder.setObjectName("fieldLabel")
-        self._layout.addWidget(self._placeholder)
+        if self._scroll is not None:
+            self._scroll.setWidget(self._placeholder)
+        else:
+            self._layout.addWidget(self._placeholder)
 
     def set_figure(self, fig) -> None:
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.backends.backend_qtagg import (
+            FigureCanvasQTAgg, NavigationToolbar2QT,
+        )
 
-        # Remove old canvas
-        if self._canvas:
-            self._layout.removeWidget(self._canvas)
-            self._canvas.deleteLater()
-            self._canvas = None
-
-        if self._placeholder:
-            self._layout.removeWidget(self._placeholder)
+        self._drop_canvas()
+        if self._placeholder is not None:
             self._placeholder.hide()
+            if self._scroll is None:
+                self._layout.removeWidget(self._placeholder)
 
         self._canvas = FigureCanvasQTAgg(fig)
-        self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._layout.addWidget(self._canvas)
+        if self._scroll is not None:
+            w, h = fig.get_size_inches()
+            dpi  = fig.get_dpi()
+            self._canvas.setFixedSize(int(w * dpi), int(h * dpi))
+            self._scroll.setWidget(self._canvas)
+        else:
+            self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self._layout.addWidget(self._canvas)
+
+        if self._show_toolbar:
+            self._toolbar = NavigationToolbar2QT(self._canvas, self)
+            self._toolbar.setStyleSheet(
+                "background:#161b22; color:#e6edf3; border:none;"
+            )
+            self._layout.insertWidget(0, self._toolbar)
+
         self._canvas.draw()
 
     def clear(self) -> None:
-        if self._canvas:
-            self._layout.removeWidget(self._canvas)
+        self._drop_canvas()
+        if self._placeholder is not None:
+            self._placeholder.show()
+            if self._scroll is not None:
+                self._scroll.setWidget(self._placeholder)
+            else:
+                self._layout.addWidget(self._placeholder)
+
+    def _drop_canvas(self) -> None:
+        if self._toolbar is not None:
+            self._layout.removeWidget(self._toolbar)
+            self._toolbar.deleteLater()
+            self._toolbar = None
+        if self._canvas is not None:
+            if self._scroll is not None:
+                self._scroll.takeWidget()
+            else:
+                self._layout.removeWidget(self._canvas)
             self._canvas.deleteLater()
             self._canvas = None
-        if self._placeholder:
-            self._placeholder.show()
-            self._layout.addWidget(self._placeholder)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  WATERFALL VIEW CONTROL BAR
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WaterfallControlBar(QWidget):
+    """
+    Hz min / Hz max / RPM min / RPM max alanlari + Yenile butonu.
+
+    ``refresh_requested(freq_min, freq_max, rpm_min, rpm_max)`` sinyalini
+    firlatir. Bos kalan alan ``None`` olarak gelir (alici varsayilan
+    araligi uygulamali).
+    """
+
+    refresh_requested = Signal(object, object, object, object)
+
+    def __init__(self, parent=None,
+                 default_freq_max: float = 3000.0):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QLineEdit
+        from PySide6.QtGui import QDoubleValidator
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(6)
+
+        v = QDoubleValidator(0.0, 1.0e6, 3, self)
+
+        def _field(placeholder: str, width: int = 84) -> "QLineEdit":
+            le = QLineEdit()
+            le.setPlaceholderText(placeholder)
+            le.setValidator(v)
+            le.setFixedWidth(width)
+            return le
+
+        layout.addWidget(self._lbl("Hz:"))
+        self._hz_min = _field("min")
+        self._hz_max = _field("max")
+        self._hz_max.setText(str(default_freq_max))
+        layout.addWidget(self._hz_min)
+        layout.addWidget(self._dash())
+        layout.addWidget(self._hz_max)
+
+        layout.addSpacing(12)
+        layout.addWidget(self._lbl("RPM:"))
+        self._rpm_min = _field("min")
+        self._rpm_max = _field("max")
+        layout.addWidget(self._rpm_min)
+        layout.addWidget(self._dash())
+        layout.addWidget(self._rpm_max)
+
+        layout.addStretch()
+
+        self._refresh_btn = QPushButton("⟳  Yenile")
+        self._refresh_btn.setObjectName("btnBrowse")
+        self._refresh_btn.clicked.connect(self._emit_refresh)
+        layout.addWidget(self._refresh_btn)
+
+        for le in (self._hz_min, self._hz_max, self._rpm_min, self._rpm_max):
+            le.returnPressed.connect(self._emit_refresh)
+
+    @staticmethod
+    def _lbl(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("fieldLabel")
+        return lbl
+
+    @staticmethod
+    def _dash() -> QLabel:
+        d = QLabel("–")
+        d.setObjectName("fieldLabel")
+        return d
+
+    @staticmethod
+    def _parse(le) -> Optional[float]:
+        text = le.text().strip().replace(",", ".")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    def _emit_refresh(self) -> None:
+        self.refresh_requested.emit(
+            self._parse(self._hz_min),
+            self._parse(self._hz_max),
+            self._parse(self._rpm_min),
+            self._parse(self._rpm_max),
+        )
+
+    def set_rpm_range(self, rpm_min: float, rpm_max: float) -> None:
+        """RPM alanlarina run'in araligini placeholder olarak yaz."""
+        self._rpm_min.setPlaceholderText(f"{rpm_min:.0f}")
+        self._rpm_max.setPlaceholderText(f"{rpm_max:.0f}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

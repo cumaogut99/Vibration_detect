@@ -26,6 +26,7 @@ from ui_worker import LoadChannelWorker, CompareChannelsWorker, SingleChannelWor
 from ui_widgets import (
     HealthScoreDial, FilePickerRow,
     LoadingOverlay, LogPanel, MatplotlibCanvas, ChannelStore,
+    WaterfallControlBar,
 )
 
 logger = logging.getLogger(__name__)
@@ -314,6 +315,48 @@ class PageDataManagement(QWidget):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  WATERFALL TAB  (control bar + scrollable canvas + nav toolbar)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WaterfallTab(QWidget):
+    """Kontrol cubugu (Hz/RPM aralik) + matplotlib canvas paketi.
+
+    `render_fn(freq_min, freq_max, rpm_min, rpm_max)` cagrildiginda yeni bir
+    `Figure` dondurmeli (veya kaynak run yoksa `None`).
+    """
+
+    def __init__(self, render_fn, parent=None,
+                 default_freq_max: float = 3000.0):
+        super().__init__(parent)
+        self._render_fn = render_fn
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._control = WaterfallControlBar(
+            self, default_freq_max=default_freq_max,
+        )
+        self._control.refresh_requested.connect(self._on_refresh)
+        layout.addWidget(self._control)
+
+        self._canvas = MatplotlibCanvas(self, show_toolbar=True)
+        layout.addWidget(self._canvas, stretch=1)
+
+    def render(self, freq_min=None, freq_max=None,
+               rpm_min=None, rpm_max=None) -> None:
+        fig = self._render_fn(freq_min, freq_max, rpm_min, rpm_max)
+        if fig is not None:
+            self._canvas.set_figure(fig)
+
+    def set_rpm_range(self, lo: float, hi: float) -> None:
+        self._control.set_rpm_range(lo, hi)
+
+    def _on_refresh(self, freq_min, freq_max, rpm_min, rpm_max):
+        self.render(freq_min, freq_max, rpm_min, rpm_max)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  PAGE: ANALIZ  (tek kanal goruntuleme + iki kanal karsilastirma)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -440,16 +483,23 @@ class PageAnalysis(QWidget):
         self._plot_tabs.setObjectName("plotTabs")
         splitter.addWidget(self._plot_tabs)
 
-        # Plot canvas'lari — modlar arasinda paylasilir, set_figure ile guncellenir
-        self._canvas_main_wf  = MatplotlibCanvas()  # Tek kanal & ana kanal waterfall
-        self._canvas_ref_wf   = MatplotlibCanvas()  # Karsilastirmada referans waterfall
-        self._canvas_ratio_wf = MatplotlibCanvas()  # Karsilastirmada oran waterfall
-        self._canvas_orders   = MatplotlibCanvas()
-        self._canvas_card     = MatplotlibCanvas()
+        # Aktif run referanslari — render_fn'ler bunlari okur
+        self._cur_single_run = None
+        self._cur_meas_run   = None
+        self._cur_ref_run    = None
+
+        # Waterfall sekmeleri (kontrol cubugu + canvas + nav araç çubuğu)
+        self._main_wf_tab  = WaterfallTab(self._render_main_wf)
+        self._ref_wf_tab   = WaterfallTab(self._render_ref_wf)
+        self._ratio_wf_tab = WaterfallTab(self._render_ratio_wf)
+
+        # Order genlikleri ve tani karti — order grid taller -> scrollable
+        self._canvas_orders = MatplotlibCanvas(show_toolbar=True, scrollable=True)
+        self._canvas_card   = MatplotlibCanvas(show_toolbar=False)
 
         # Tab indeksleri runtime'da yeniden duzenlenir
-        self._plot_tabs.addTab(self._canvas_main_wf,  "🌊  Waterfall")
-        self._plot_tabs.addTab(self._canvas_orders,   "📊  Order Genlikleri")
+        self._plot_tabs.addTab(self._main_wf_tab,  "🌊  Waterfall")
+        self._plot_tabs.addTab(self._canvas_orders,"📊  Order Genlikleri")
 
         # Tani paneli
         diag_scroll = QScrollArea()
@@ -492,16 +542,16 @@ class PageAnalysis(QWidget):
 
         if idx == 0:
             # Tek kanal: sadece waterfall + order genlikleri (referanssiz)
-            self._plot_tabs.addTab(self._canvas_main_wf, "🌊  Waterfall")
-            self._plot_tabs.addTab(self._canvas_orders,  "📊  Order Genlikleri")
+            self._plot_tabs.addTab(self._main_wf_tab, "🌊  Waterfall")
+            self._plot_tabs.addTab(self._canvas_orders, "📊  Order Genlikleri")
             self._diag_scroll.setVisible(False)
         else:
             # Iki kanal: ana, referans, oran + order karsilastirma + tani karti
-            self._plot_tabs.addTab(self._canvas_main_wf,  "🌊  Waterfall (Ana)")
-            self._plot_tabs.addTab(self._canvas_ref_wf,   "🌊  Waterfall (Referans)")
-            self._plot_tabs.addTab(self._canvas_ratio_wf, "📐  Waterfall Orani (dB)")
-            self._plot_tabs.addTab(self._canvas_orders,   "📈  Order Karsilastirma")
-            self._plot_tabs.addTab(self._canvas_card,     "📋  Tani Karti")
+            self._plot_tabs.addTab(self._main_wf_tab,  "🌊  Waterfall (Ana)")
+            self._plot_tabs.addTab(self._ref_wf_tab,   "🌊  Waterfall (Referans)")
+            self._plot_tabs.addTab(self._ratio_wf_tab, "📐  Waterfall Orani (dB)")
+            self._plot_tabs.addTab(self._canvas_orders,"📈  Order Karsilastirma")
+            self._plot_tabs.addTab(self._canvas_card,  "📋  Tani Karti")
             self._diag_scroll.setVisible(True)
 
     # ── Motor & kanal combo'lari guncel tut ───────────────────────────────
@@ -575,13 +625,17 @@ class PageAnalysis(QWidget):
     def _render_single(self, run, order_data):
         import matplotlib
         matplotlib.use("Agg")
-        from plots import plot_waterfall, plot_order_comparison
+        from plots import plot_order_comparison
 
-        try:
-            fig = plot_waterfall(run)
-            self._canvas_main_wf.set_figure(fig)
-        except Exception as exc:
-            logger.warning("Waterfall plot hatasi: %s", exc)
+        # Mevcut run'i kaydet — kontrol cubugu yenilemeleri bunu kullanir
+        self._cur_single_run = run
+        self._cur_meas_run = None
+        self._cur_ref_run = None
+
+        # Waterfall sekmesi: kontrol cubugundaki RPM placeholder'larini guncelle
+        # ve varsayilan araliklarla cizdir.
+        self._main_wf_tab.set_rpm_range(*run.rpm_range)
+        self._main_wf_tab.render()
 
         # Tek kanal: order genlikleri (referans yok → karsilastirma yapilmaz)
         try:
@@ -632,26 +686,21 @@ class PageAnalysis(QWidget):
     def _render_compare(self, report, order_data, ref_order_data, meas_run, ref_run):
         import matplotlib
         matplotlib.use("Agg")
-        from plots import (plot_waterfall, plot_waterfall_ratio,
-                           plot_order_comparison, plot_diagnostic_card)
+        from plots import plot_order_comparison, plot_diagnostic_card
 
-        try:
-            fig_main = plot_waterfall(meas_run)
-            self._canvas_main_wf.set_figure(fig_main)
-        except Exception as exc:
-            logger.warning("Ana waterfall hatasi: %s", exc)
+        # Mevcut run'lari kaydet
+        self._cur_single_run = None
+        self._cur_meas_run = meas_run
+        self._cur_ref_run  = ref_run
 
-        try:
-            fig_ref = plot_waterfall(ref_run)
-            self._canvas_ref_wf.set_figure(fig_ref)
-        except Exception as exc:
-            logger.warning("Ref waterfall hatasi: %s", exc)
-
-        try:
-            fig_ratio = plot_waterfall_ratio(meas_run, ref_run)
-            self._canvas_ratio_wf.set_figure(fig_ratio)
-        except Exception as exc:
-            logger.warning("Oran waterfall hatasi: %s", exc)
+        # Uc waterfall sekmesini render et — kontrol cubuklari _render_*_wf
+        # fonksiyonlarini yeniden tetikleyebilir.
+        self._main_wf_tab.set_rpm_range(*meas_run.rpm_range)
+        self._main_wf_tab.render()
+        self._ref_wf_tab.set_rpm_range(*ref_run.rpm_range)
+        self._ref_wf_tab.render()
+        self._ratio_wf_tab.set_rpm_range(*meas_run.rpm_range)
+        self._ratio_wf_tab.render()
 
         try:
             fig_ord = plot_order_comparison(order_data, ref_order_data,
@@ -674,6 +723,41 @@ class PageAnalysis(QWidget):
         self._compare_run_btn.setEnabled(True)
         self.log_message.emit(f"✕ Hata: {msg.splitlines()[0]}", "ERROR")
         QMessageBox.critical(self, "Hata", msg[:400])
+
+    # ── Waterfall render callback'leri (kontrol cubuklarindan cagrilir) ────
+    def _render_main_wf(self, freq_min, freq_max, rpm_min, rpm_max):
+        run = self._cur_single_run or self._cur_meas_run
+        if run is None:
+            return None
+        from plots import plot_waterfall
+        return plot_waterfall(
+            run,
+            freq_min=freq_min if freq_min is not None else 0.0,
+            freq_max=freq_max if freq_max is not None else 3000.0,
+            rpm_min=rpm_min, rpm_max=rpm_max,
+        )
+
+    def _render_ref_wf(self, freq_min, freq_max, rpm_min, rpm_max):
+        if self._cur_ref_run is None:
+            return None
+        from plots import plot_waterfall
+        return plot_waterfall(
+            self._cur_ref_run,
+            freq_min=freq_min if freq_min is not None else 0.0,
+            freq_max=freq_max if freq_max is not None else 3000.0,
+            rpm_min=rpm_min, rpm_max=rpm_max,
+        )
+
+    def _render_ratio_wf(self, freq_min, freq_max, rpm_min, rpm_max):
+        if self._cur_meas_run is None or self._cur_ref_run is None:
+            return None
+        from plots import plot_waterfall_ratio
+        return plot_waterfall_ratio(
+            self._cur_meas_run, self._cur_ref_run,
+            freq_min=freq_min if freq_min is not None else 0.0,
+            freq_max=freq_max if freq_max is not None else 3000.0,
+            rpm_min=rpm_min, rpm_max=rpm_max,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -801,6 +885,8 @@ class PageEngineConfig(QWidget):
             "Mechanical": "#f0883e",
             "Bearing": "#bc8cff",
             "Misalignment": "#d29922",
+            "Propeller": "#bc8cff",
+            "Engine Mount": "#d29922",
         }
         for order, odef in sorted(ORDER_DEFINITIONS.items()):
             row = order_tbl.rowCount()
