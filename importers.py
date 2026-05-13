@@ -64,6 +64,65 @@ def parse_filename(path: Path) -> Optional[Dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+#  DEWESOFT CSV ORTAK BASLIK TESPITI
+# ---------------------------------------------------------------------------
+
+_HEADER_SCAN_LIMIT = 6  # ilk 6 satirda ara
+
+def _find_dewesoft_header_row(rows: List[List[str]]) -> Optional[int]:
+    """
+    DEWESoft CSV'lerinde "Speed (rpm) / ..." sutununu iceren basligi bulur.
+
+    Bazı varyantlarda satir 0'da, bazilarinda satir 2'de (kanal adi + birim
+    satirlari ustte) yer alir. Aranan satir: ilk hucresinde "speed" / "rpm" /
+    "devir" gecen VE kalan hucrelerde en az 3 sayisal deger bulunan satir.
+    """
+    for i in range(min(_HEADER_SCAN_LIMIT, len(rows))):
+        row = rows[i]
+        if not row or not row[0]:
+            continue
+        first = row[0].strip().lower()
+        if not any(k in first for k in ("speed", "rpm", "devir")):
+            continue
+        numeric_count = 0
+        for cell in row[1:]:
+            c = (cell or "").strip()
+            if not c:
+                continue
+            try:
+                float(c)
+                numeric_count += 1
+                if numeric_count >= 3:
+                    return i
+            except ValueError:
+                continue
+    return None
+
+
+def _peek_header_first_cell(path: Path) -> str:
+    """Dosyanin ilk _HEADER_SCAN_LIMIT satiri icinde Speed/RPM iceren ilk
+    hucreyi dondur (kucuk harfle). Bulamazsa bos string."""
+    try:
+        with path.open(encoding="utf-8-sig", errors="replace", newline="") as f:
+            head = []
+            for _ in range(_HEADER_SCAN_LIMIT):
+                line = f.readline()
+                if not line:
+                    break
+                head.append(line)
+        if not head:
+            return ""
+        reader = csv.reader(io.StringIO("".join(head)))
+        rows = list(reader)
+        idx = _find_dewesoft_header_row(rows)
+        if idx is None:
+            return ""
+        return rows[idx][0].strip().lower()
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
 #  ABSTRACT BASE
 # ---------------------------------------------------------------------------
 
@@ -87,24 +146,20 @@ class BaseImporter(abc.ABC):
 
 class DewesoftOrderTrackingImporter(BaseImporter):
     """
-    Birincil format. Satir 3'te "Speed/RPM" VE "Order" kelimesi olmalı.
+    DEWESoft Order Tracking CSV.
+
+    Esnek format: baslik satiri ilk 6 satirin herhangi birinde olabilir.
+    Tanima kriteri: ilk hucrede "speed"/"rpm"/"devir" + "order" gecmesi VE
+    "freq" gecmemesi.
     """
 
     def can_handle(self, path: Path) -> bool:
         if path.suffix.lower() != ".csv":
             return False
-        try:
-            with path.open(encoding="utf-8-sig", errors="replace") as f:
-                for _ in range(2):
-                    f.readline()
-                row3 = f.readline().lower()
-            return (
-                any(k in row3 for k in ("speed", "rpm", "devir")) and
-                "order" in row3 and
-                "freq" not in row3
-            )
-        except Exception:
+        header = _peek_header_first_cell(path)
+        if not header:
             return False
+        return "order" in header and "freq" not in header
 
     def load(self, path: Path, engine_id: str, run_id: str,
              sensor_location: str, axis: str = "X",
@@ -116,15 +171,18 @@ class DewesoftOrderTrackingImporter(BaseImporter):
             io.StringIO(path.read_text(encoding="utf-8-sig", errors="replace"))
         ))
 
-        if len(rows) < 4:
-            raise ValueError(f"Yetersiz satir ({len(rows)}): {path.name}")
+        header_idx = _find_dewesoft_header_row(rows)
+        if header_idx is None:
+            raise ValueError(f"Baslik satiri bulunamadi: {path.name}")
+        if len(rows) <= header_idx + 1:
+            raise ValueError(f"Veri satiri yok: {path.name}")
 
-        channel_header = rows[0][0].strip() if rows[0] else ""
-        unit_str       = rows[1][0].strip() if len(rows) > 1 else ""
+        channel_header = rows[0][0].strip() if header_idx >= 1 and rows[0] else ""
+        unit_str       = rows[1][0].strip() if header_idx >= 2 and len(rows) > 1 else ""
 
-        # Satir 3: order degerleri
+        # Baslik satiri: order degerleri
         orders: List[float] = []
-        for cell in rows[2][1:]:
+        for cell in rows[header_idx][1:]:
             c = cell.strip()
             if not c:
                 continue
@@ -142,7 +200,7 @@ class DewesoftOrderTrackingImporter(BaseImporter):
         rpm_list: List[float] = []
         amp_rows: List[List[float]] = []
 
-        for row in rows[3:]:
+        for row in rows[header_idx + 1:]:
             if not row or not row[0].strip():
                 continue
             try:
@@ -193,21 +251,26 @@ class DewesoftOrderTrackingImporter(BaseImporter):
 # ---------------------------------------------------------------------------
 
 class DewesoftWaterfallImporter(BaseImporter):
+    """
+    DEWESoft FFT Waterfall CSV.
+
+    Baslik satiri ilk 6 satirin herhangi birinde olabilir; ilk hucrede
+    "speed"/"rpm" + "freq"/"hz"/"frequency" gecmesi yeterli. Eger sadece
+    "speed/rpm" varsa (order/freq ayrimi belirsizse) bu importer fallback
+    olarak devreye girer (factory'de OT'den sonra siralanir).
+    """
 
     def can_handle(self, path: Path) -> bool:
         if path.suffix.lower() != ".csv":
             return False
-        try:
-            with path.open(encoding="utf-8-sig", errors="replace") as f:
-                for _ in range(2):
-                    f.readline()
-                row3 = f.readline().lower()
-            return (
-                any(k in row3 for k in ("speed", "rpm", "devir")) and
-                any(k in row3 for k in ("freq", "hz", "frequency"))
-            )
-        except Exception:
+        header = _peek_header_first_cell(path)
+        if not header:
             return False
+        # Belirgin frekans isareti varsa kesin
+        if any(k in header for k in ("freq", "frequency", "hz")):
+            return True
+        # Sadece "speed/rpm" varsa ve "order" yoksa fallback olarak biz al
+        return "order" not in header
 
     def load(self, path: Path, engine_id: str, run_id: str,
              sensor_location: str, axis: str = "X",
@@ -219,14 +282,17 @@ class DewesoftWaterfallImporter(BaseImporter):
             io.StringIO(path.read_text(encoding="utf-8-sig", errors="replace"))
         ))
 
-        if len(rows) < 4:
-            raise ValueError(f"Yetersiz satir: {path.name}")
+        header_idx = _find_dewesoft_header_row(rows)
+        if header_idx is None:
+            raise ValueError(f"Baslik satiri bulunamadi: {path.name}")
+        if len(rows) <= header_idx + 1:
+            raise ValueError(f"Veri satiri yok: {path.name}")
 
-        channel_header = rows[0][0].strip() if rows[0] else ""
-        unit_str       = rows[1][0].strip() if len(rows) > 1 else ""
+        channel_header = rows[0][0].strip() if header_idx >= 1 and rows[0] else ""
+        unit_str       = rows[1][0].strip() if header_idx >= 2 and len(rows) > 1 else ""
 
         freq_values: List[float] = []
-        for cell in rows[2][1:]:
+        for cell in rows[header_idx][1:]:
             c = cell.strip()
             if not c:
                 continue
@@ -244,7 +310,7 @@ class DewesoftWaterfallImporter(BaseImporter):
         rpm_list: List[float] = []
         amp_rows: List[List[float]] = []
 
-        for row in rows[3:]:
+        for row in rows[header_idx + 1:]:
             if not row or not row[0].strip():
                 continue
             try:
