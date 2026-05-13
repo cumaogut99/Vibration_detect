@@ -467,7 +467,7 @@ class ImporterFactory:
                 return imp
         raise ValueError(
             f"Desteklenmeyen format: {path.suffix} ({path.name})\n"
-            f"Desteklenen: .csv (DEWESoft OT/Waterfall), .npz, .txt, .dat"
+            f"Desteklenen uzantilar: .csv, .npz, .txt, .dat"
         )
 
     def load(self, path: Path, engine_id: str, run_id: str,

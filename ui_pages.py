@@ -24,8 +24,7 @@ from PySide6.QtGui import QColor
 
 from ui_worker import LoadChannelWorker, CompareChannelsWorker, SingleChannelWorker
 from ui_widgets import (
-    SectionTitle, Divider, StatusBadge, HealthScoreDial,
-    EngineCard, FilePickerRow, FolderPickerRow,
+    HealthScoreDial, FilePickerRow,
     LoadingOverlay, LogPanel, MatplotlibCanvas, ChannelStore,
 )
 
@@ -35,20 +34,6 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 #  HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _page_header(title: str, subtitle: str) -> QWidget:
-    w = QWidget()
-    layout = QVBoxLayout(w)
-    layout.setContentsMargins(0, 0, 0, 8)
-    layout.setSpacing(2)
-    t = QLabel(title)
-    t.setObjectName("pageTitle")
-    layout.addWidget(t)
-    s = QLabel(subtitle)
-    s.setObjectName("pageSubtitle")
-    layout.addWidget(s)
-    return w
-
 
 def _card(title: str = "") -> tuple[QFrame, QVBoxLayout]:
     card = QFrame()
@@ -126,14 +111,8 @@ class PageDataManagement(QWidget):
         self._worker: Optional[LoadChannelWorker] = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 24, 28, 24)
-        outer.setSpacing(20)
-
-        outer.addWidget(_page_header(
-            "📂  Veri Yonetimi",
-            "Olcum dosyalarini yukleyin ve mevcut kanallari yonetin.",
-        ))
-        outer.addWidget(Divider())
+        outer.setContentsMargins(20, 12, 20, 12)
+        outer.setSpacing(12)
 
         # Iki sutunlu yerlesim — sol: yukleme kart, sag: kanal listesi
         cols = QHBoxLayout()
@@ -350,89 +329,92 @@ class PageAnalysis(QWidget):
         self._worker = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 24, 28, 24)
-        outer.setSpacing(16)
+        outer.setContentsMargins(20, 12, 20, 12)
+        outer.setSpacing(10)
 
-        outer.addWidget(_page_header(
-            "📈  Analiz",
-            "Tek kanal goruntuleme veya iki kanal arasi karsilastirma yapin.",
-        ))
-        outer.addWidget(Divider())
+        # ── Mod + Motor + Kanal secimleri tek satirda ─────────────────────
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        outer.addLayout(top_row)
 
-        # ── Mod secici ────────────────────────────────────────────────────
-        mode_row = QHBoxLayout()
-        mode_row.setSpacing(20)
-
-        self._rb_single  = QRadioButton("Tek Kanal Goruntuleme")
-        self._rb_compare = QRadioButton("İki Kanal Karsilastirma")
+        # Mod secici
+        self._rb_single  = QRadioButton("Tek Kanal")
+        self._rb_compare = QRadioButton("Karsilastirma")
         self._rb_single.setChecked(True)
-
         self._mode_group = QButtonGroup(self)
         self._mode_group.addButton(self._rb_single, 0)
         self._mode_group.addButton(self._rb_compare, 1)
         self._mode_group.idToggled.connect(self._on_mode_changed)
 
-        mode_row.addWidget(self._rb_single)
-        mode_row.addWidget(self._rb_compare)
-        mode_row.addStretch()
-        outer.addLayout(mode_row)
+        top_row.addWidget(self._rb_single)
+        top_row.addWidget(self._rb_compare)
 
-        # ── Kanal seciciler (modlara gore degisir) ────────────────────────
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setFixedHeight(28)
+        sep.setStyleSheet("color:#30363d;")
+        top_row.addWidget(sep)
+
+        # Motor combo (her iki modda ortak — kanallari filtreler)
+        lbl_motor = QLabel("Motor:")
+        lbl_motor.setObjectName("fieldLabel")
+        top_row.addWidget(lbl_motor)
+        self._motor_combo = QComboBox()
+        self._motor_combo.setMinimumWidth(140)
+        self._motor_combo.setMaximumWidth(180)
+        self._motor_combo.currentTextChanged.connect(self._on_motor_changed)
+        top_row.addWidget(self._motor_combo)
+
+        # Kanal seciciler — modlara gore birden fazla
         self._selector_stack = QStackedWidget()
-        outer.addWidget(self._selector_stack)
+        top_row.addWidget(self._selector_stack, stretch=1)
 
-        # Tek kanal moduyle ilgili kontroller
+        # Tek kanal seciciyi sar
         single_wrap = QWidget()
         sw_l = QHBoxLayout(single_wrap)
         sw_l.setContentsMargins(0, 0, 0, 0)
-        sw_l.setSpacing(10)
+        sw_l.setSpacing(8)
         lbl_s = QLabel("Kanal:")
         lbl_s.setObjectName("fieldLabel")
-        lbl_s.setFixedWidth(120)
         sw_l.addWidget(lbl_s)
         self._single_combo = QComboBox()
-        self._single_combo.setMinimumWidth(380)
-        sw_l.addWidget(self._single_combo, stretch=1)
+        self._single_combo.setMinimumWidth(220)
+        self._single_combo.setMaximumWidth(320)
+        sw_l.addWidget(self._single_combo)
+        sw_l.addStretch()
+        self._selector_stack.addWidget(single_wrap)
+
+        # Iki kanal secicileri sar (yan yana)
+        compare_wrap = QWidget()
+        cw_l = QHBoxLayout(compare_wrap)
+        cw_l.setContentsMargins(0, 0, 0, 0)
+        cw_l.setSpacing(8)
+        lbl_r = QLabel("Referans:")
+        lbl_r.setObjectName("fieldLabel")
+        cw_l.addWidget(lbl_r)
+        self._ref_combo = QComboBox()
+        self._ref_combo.setMinimumWidth(200)
+        self._ref_combo.setMaximumWidth(280)
+        cw_l.addWidget(self._ref_combo)
+        lbl_m = QLabel("Ana:")
+        lbl_m.setObjectName("fieldLabel")
+        cw_l.addWidget(lbl_m)
+        self._main_combo = QComboBox()
+        self._main_combo.setMinimumWidth(200)
+        self._main_combo.setMaximumWidth(280)
+        cw_l.addWidget(self._main_combo)
+        cw_l.addStretch()
+        self._selector_stack.addWidget(compare_wrap)
+
+        # Eylem butonu — comboboxlarin sagi
         self._single_run_btn = QPushButton("▶  Goruntule")
         self._single_run_btn.setObjectName("btnPrimary")
         self._single_run_btn.clicked.connect(self._run_single)
-        sw_l.addWidget(self._single_run_btn)
-        self._selector_stack.addWidget(single_wrap)
-
-        # Iki kanal modunun kontrolleri
-        compare_wrap = QWidget()
-        cw_l = QVBoxLayout(compare_wrap)
-        cw_l.setContentsMargins(0, 0, 0, 0)
-        cw_l.setSpacing(8)
-
-        ref_row = QHBoxLayout()
-        lbl_r = QLabel("Referans kanal:")
-        lbl_r.setObjectName("fieldLabel")
-        lbl_r.setFixedWidth(140)
-        ref_row.addWidget(lbl_r)
-        self._ref_combo = QComboBox()
-        ref_row.addWidget(self._ref_combo, stretch=1)
-        cw_l.addLayout(ref_row)
-
-        main_row = QHBoxLayout()
-        lbl_m = QLabel("Ana (olcum) kanal:")
-        lbl_m.setObjectName("fieldLabel")
-        lbl_m.setFixedWidth(140)
-        main_row.addWidget(lbl_m)
-        self._main_combo = QComboBox()
-        main_row.addWidget(self._main_combo, stretch=1)
-        cw_l.addLayout(main_row)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
         self._compare_run_btn = QPushButton("▶  Karsilastir")
         self._compare_run_btn.setObjectName("btnPrimary")
         self._compare_run_btn.clicked.connect(self._run_compare)
-        btn_row.addWidget(self._compare_run_btn)
-        cw_l.addLayout(btn_row)
-        self._selector_stack.addWidget(compare_wrap)
-
-        outer.addWidget(Divider())
+        top_row.addWidget(self._single_run_btn)
+        top_row.addWidget(self._compare_run_btn)
 
         # ── Sonuc bolumu: sol grafik tablari, sag tani panel ───────────────
         splitter = QSplitter(Qt.Horizontal)
@@ -480,11 +462,15 @@ class PageAnalysis(QWidget):
         self._overlay.setGeometry(self.rect())
         super().resizeEvent(event)
 
-    # ── Mod degisimi: tab yerlesimi ve panel gorunurlugu ───────────────────
+    # ── Mod degisimi: tab yerlesimi ve panel/buton gorunurlugu ─────────────
     def _on_mode_changed(self, idx: int, checked: bool):
         if not checked:
             return
         self._selector_stack.setCurrentIndex(idx)
+
+        # Buton gorunurlugu
+        self._single_run_btn.setVisible(idx == 0)
+        self._compare_run_btn.setVisible(idx == 1)
 
         # Tablari sifirla
         while self._plot_tabs.count():
@@ -504,9 +490,27 @@ class PageAnalysis(QWidget):
             self._plot_tabs.addTab(self._canvas_card,     "📋  Tani Karti")
             self._diag_scroll.setVisible(True)
 
-    # ── Kanal combo'larini guncel tut ─────────────────────────────────────
+    # ── Motor & kanal combo'lari guncel tut ───────────────────────────────
     def _refresh_combos(self, *_args):
-        keys = self._store.keys()
+        # Motor listesi — store'daki tum kanallardan distinct engine_id
+        engines = sorted({r.engine_id for _, r in self._store.items()})
+        cur_motor = self._motor_combo.currentText()
+        self._motor_combo.blockSignals(True)
+        self._motor_combo.clear()
+        self._motor_combo.addItems(engines)
+        if cur_motor in engines:
+            self._motor_combo.setCurrentText(cur_motor)
+        self._motor_combo.blockSignals(False)
+
+        # Bunlar motor seciminden filtrelenir
+        self._refresh_channel_combos()
+
+    def _on_motor_changed(self, _text: str):
+        self._refresh_channel_combos()
+
+    def _refresh_channel_combos(self):
+        motor = self._motor_combo.currentText()
+        keys = [k for k, r in self._store.items() if r.engine_id == motor]
         for combo in (self._single_combo, self._ref_combo, self._main_combo):
             cur = combo.currentText()
             combo.blockSignals(True)
@@ -742,14 +746,8 @@ class PageEngineConfig(QWidget):
         self.setObjectName("pageContent")
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 24, 28, 24)
-        outer.setSpacing(16)
-
-        outer.addWidget(_page_header(
-            "⚙️  Motor Konfigurasyonu",
-            "engine_config.py dosyasindaki motor-spesifik tanimlari goruntuleyin.",
-        ))
-        outer.addWidget(Divider())
+        outer.setContentsMargins(20, 12, 20, 12)
+        outer.setSpacing(8)
 
         tabs = QTabWidget()
         outer.addWidget(tabs, stretch=1)
@@ -841,14 +839,8 @@ class PageLog(QWidget):
         self.setObjectName("pageContent")
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 24, 28, 24)
-        outer.setSpacing(16)
-
-        outer.addWidget(_page_header(
-            "📋  Log",
-            "Veri yukleme ve analiz islemlerinin gunlugunu burada gorebilirsiniz.",
-        ))
-        outer.addWidget(Divider())
+        outer.setContentsMargins(20, 12, 20, 12)
+        outer.setSpacing(8)
 
         log_card, log_body = _card("Uygulama Gunlugu")
         toolbar = QHBoxLayout()

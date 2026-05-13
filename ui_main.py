@@ -26,9 +26,7 @@ import engine_config   # noqa: F401
 import importers       # noqa: F401
 import analysis        # noqa: F401
 
-from ui_widgets import (
-    Divider, ChannelStore, TopTabButton,
-)
+from ui_widgets import ChannelStore, TopTabButton
 from ui_pages import (
     PageDataManagement,
     PageEngineConfig,
@@ -93,6 +91,17 @@ class MainWindow(QMainWindow):
         # Tum sayfalarin paylastigi merkezi kanal deposu
         self._store = ChannelStore(self)
 
+        # Kalici DuckDB deposu (yoksa sessizce devre disi)
+        self._db = None
+        self._key_to_db_id: dict[str, int] = {}
+        self._loading_from_db = False
+        try:
+            from db_layer import DataStore
+            self._db = DataStore()
+            logger.info("DuckDB deposu acildi: %s", self._db.db_path)
+        except Exception as exc:
+            logger.warning("DuckDB devre disi: %s", exc)
+
         central = QWidget()
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
@@ -126,11 +135,25 @@ class MainWindow(QMainWindow):
         self._status = QStatusBar()
         self._status.setObjectName("statusBar")
         self.setStatusBar(self._status)
-        self._status.showMessage("Hazir  ·  Veri Yonetimi'nden bir kanal yukleyin")
 
-        # Yuklenmis kanal sayisini durum cubugunda goster
+        # DuckDB persist hook'lari
+        self._store.channel_added.connect(self._persist_channel)
+        self._store.channel_removed.connect(self._delete_channel)
         self._store.channel_added.connect(self._refresh_status)
         self._store.channel_removed.connect(self._refresh_status)
+
+        # Mevcut DB icerigini in-memory store'a yukle
+        self._load_existing_channels_from_db()
+
+        if self._db is not None:
+            self._status.showMessage(
+                f"Hazir  ·  DB: {self._db.db_path}  ·  "
+                f"Yuklenmis kanal: {len(self._store)}"
+            )
+        else:
+            self._status.showMessage(
+                "Hazir  ·  (DuckDB pasif — kalici saklama yok)"
+            )
 
         # Ilk sayfa
         self._select_page(0)
@@ -188,10 +211,79 @@ class MainWindow(QMainWindow):
 
     def _refresh_status(self, *_args) -> None:
         n = len(self._store)
-        self._status.showMessage(f"Yuklenmis kanal sayisi: {n}")
+        if self._db is not None:
+            self._status.showMessage(
+                f"DB: {self._db.db_path}  ·  Yuklenmis kanal: {n}"
+            )
+        else:
+            self._status.showMessage(f"Yuklenmis kanal: {n}")
 
     def show_status(self, msg: str) -> None:
         self._status.showMessage(msg)
+
+    # ── DuckDB kalici saklama ─────────────────────────────────────────────
+
+    def _persist_channel(self, key: str, run) -> None:
+        """ChannelStore'a eklenen kanali DuckDB'ye yaz."""
+        if self._db is None or self._loading_from_db:
+            return
+        if key in self._key_to_db_id:
+            return
+        try:
+            src = run.metadata.get("source_file") if run.metadata else None
+            db_id = self._db.insert_run(run, source_file=src)
+            self._key_to_db_id[key] = db_id
+            self._page_log.append(
+                f"💾  DB'ye kaydedildi (id={db_id}): {key}", "INFO"
+            )
+        except Exception as exc:
+            logger.warning("DB persist hatasi: %s", exc)
+            self._page_log.append(f"⚠  DB persist hatasi: {exc}", "WARNING")
+
+    def _delete_channel(self, key: str) -> None:
+        """ChannelStore'dan kaldirilan kanali DuckDB'den de sil."""
+        if self._db is None:
+            return
+        db_id = self._key_to_db_id.pop(key, None)
+        if db_id is None:
+            return
+        try:
+            self._db.delete_run(db_id)
+            self._page_log.append(
+                f"🗑  DB'den silindi (id={db_id}): {key}", "INFO"
+            )
+        except Exception as exc:
+            logger.warning("DB delete hatasi: %s", exc)
+
+    def _load_existing_channels_from_db(self) -> None:
+        """Uygulama acilirken DuckDB'deki kayitli kanallari belege yukler."""
+        if self._db is None:
+            return
+        self._loading_from_db = True
+        try:
+            summaries = self._db.list_runs()
+            for summary in summaries:
+                try:
+                    run = self._db.get_run(summary.id)
+                except Exception as exc:
+                    logger.warning("DB run %d yuklenemedi: %s", summary.id, exc)
+                    continue
+                key = self._store.add(run)
+                self._key_to_db_id[key] = summary.id
+            if summaries:
+                logger.info("DB'den %d kanal yuklendi", len(summaries))
+        finally:
+            self._loading_from_db = False
+
+    # ── Kapanis ───────────────────────────────────────────────────────────
+
+    def closeEvent(self, event) -> None:
+        try:
+            if self._db is not None:
+                self._db.close()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":

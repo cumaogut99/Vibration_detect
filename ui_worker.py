@@ -61,6 +61,7 @@ class LoadChannelWorker(QThread):
                 Path(self._path), self._engine, self._run,
                 self._sensor, self._axis, is_reference=self._is_ref,
             )
+            run.metadata.setdefault("source_file", str(self._path))
             self.finished.emit(run)
         except Exception as exc:
             logger.error("LoadChannelWorker hatasi: %s", exc)
