@@ -8,12 +8,18 @@ Desteklenen formatlar:
   2. DEWESoft FFT Waterfall CSV
   3. NumPy NPZ (hızlı arşiv)
   4. Genel TXT/DAT
+  5. FFT Max Hold CSV (cok-kanalli, ``load_max_hold_csv``)
 
 DEWESoft Order Tracking CSV formatı (görselden):
   Satır 1 : "OT 1/GovX_orto/Order"   (kanal adı)
   Satır 2 : "waterfall (g (peak))"   (birim)
   Satır 3 : "Speed (rpm)/Orders (-)" | 0 | 0.125 | 0.25 | ...
   Satır 4+: rpm_degeri | amp_0 | amp_0.125 | ...
+
+FFT Max Hold CSV (cok kanalli):
+  Satır 1 : "Freq (Hz)" | "27/BlokA_silindir" | "27/BlokY_krank" | ...
+  Satır 2+: freq        | amp_ch1            | amp_ch2          | ...
+  Her sutun ayri bir kanal -> ayri EngineRun (data_type=FFT_MAX_HOLD).
 
 Dosya isimlendirme standardı:
   <MOTOR_ID>__<YYYYMMDD>__<LOKASYON_KODU>__<EKSEN>__<RUN_ID>.csv
@@ -584,3 +590,124 @@ class FleetScanner:
                 if p:
                     ids.add(p["engine_id"])
         return sorted(ids)
+
+
+# ---------------------------------------------------------------------------
+#  FFT MAX HOLD CSV (cok-kanalli, tek dosya = N kanal)
+# ---------------------------------------------------------------------------
+
+def _parse_max_hold_channel_name(name: str) -> tuple[str, str]:
+    """``"27/BlokY_krank"`` -> ``("BlokY_krank", "Y")``.
+
+    - Bastaki ``"<sayilar>/"`` prefiksi soyulur.
+    - ``"/"`` -> ``"_"``.
+    - Tek karakter X/Y/Z (kelime sinirinda) eksen olarak alinir; bulunamazsa
+      varsayilan ``"X"``. Kullanici listede her zaman duzenleyebilir.
+    """
+    s = (name or "").strip()
+    s = re.sub(r"^\d+\s*/\s*", "", s)
+    s = s.replace("/", "_").strip()
+    axis = "X"
+    m = re.search(r"([XYZ])(?=[_]|$)", s)
+    if m:
+        axis = m.group(1).upper()
+    return (s or "CH", axis)
+
+
+def load_max_hold_csv(
+    path: Path,
+    engine_id: str,
+    run_id: str,
+    metadata: Optional[Dict] = None,
+) -> List[EngineRun]:
+    """Cok-kanalli FFT Max Hold CSV'sini her sutun icin bir ``EngineRun``'a
+    cevirir.
+
+    Format:
+      Satir 1 : ``"Freq (Hz)"`` , kanal_adi_1 , kanal_adi_2 , ...
+      Satir 2+: freq            , amp_ch1     , amp_ch2     , ...
+
+    Her kanal icin:
+      - ``data_type = FFT_MAX_HOLD``
+      - ``rpm_values = [0.0]``  (tek slice yer tutucu)
+      - ``frequencies`` = ilk sutun
+      - ``amplitudes`` = sutun verisi, sekil ``(1, F)``
+      - ``sensor_location`` = sanitize edilmis kanal basligi
+      - ``axis`` = kanal adindan tahmini (yoksa ``"X"``)
+
+    Hatalar (bos dosya, eksik sutun) ``ValueError`` firlatir.
+    """
+    path = Path(path)
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    rows = list(csv.reader(io.StringIO(text)))
+
+    # Bos satirlari at
+    rows = [r for r in rows if r and any(cell.strip() for cell in r)]
+    if len(rows) < 2:
+        raise ValueError(f"Yetersiz satir: {path.name}")
+
+    header = rows[0]
+    if len(header) < 2:
+        raise ValueError(
+            f"En az 1 kanal sutunu olmali (sutun sayisi={len(header)}): {path.name}"
+        )
+
+    n_channels = len(header) - 1
+    freqs: List[float] = []
+    channel_amps: List[List[float]] = [[] for _ in range(n_channels)]
+
+    for row in rows[1:]:
+        if not row or not row[0].strip():
+            continue
+        try:
+            f = float(row[0].strip().replace(",", "."))
+        except ValueError:
+            # Belki ek baslik / metin satiri — atla
+            continue
+        freqs.append(f)
+        for i in range(n_channels):
+            cell = row[i + 1].strip() if i + 1 < len(row) else ""
+            try:
+                channel_amps[i].append(
+                    float(cell.replace(",", ".")) if cell else 0.0
+                )
+            except ValueError:
+                channel_amps[i].append(0.0)
+
+    if not freqs:
+        raise ValueError(f"Veri satiri yok: {path.name}")
+
+    frequencies = np.array(freqs, dtype=np.float64)
+
+    runs: List[EngineRun] = []
+    for i, ch_name in enumerate(header[1:]):
+        location, axis = _parse_max_hold_channel_name(ch_name)
+        amps_1d = np.array(channel_amps[i], dtype=np.float64)
+        amps_2d = amps_1d.reshape(1, -1)
+        rpm_values = np.zeros(1, dtype=np.float64)
+
+        meta = dict(metadata or {})
+        meta.update({
+            "channel_header": (ch_name or "").strip(),
+            "source_format":  "fft_max_hold",
+            "axis":           axis,
+        })
+        meta.setdefault("source_file", str(path))
+
+        runs.append(EngineRun(
+            engine_id=engine_id,
+            run_id=run_id,
+            sensor_location=location,
+            axis=axis,
+            data_type=DataType.FFT_MAX_HOLD,
+            rpm_values=rpm_values,
+            frequencies=frequencies,
+            amplitudes=amps_2d,
+            metadata=meta,
+        ))
+
+    logger.info(
+        "FFT Max Hold yuklendi: %s -> %d kanal x %d frekans",
+        path.name, n_channels, len(freqs),
+    )
+    return runs

@@ -14,6 +14,7 @@ class DataType(Enum):
     ORDER_TRACKING = "order_tracking"
     TIME_WAVEFORM = "time_waveform"
     SINGLE_FFT = "single_fft"
+    FFT_MAX_HOLD = "fft_max_hold"
 
 
 @dataclass

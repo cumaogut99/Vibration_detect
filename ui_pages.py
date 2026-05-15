@@ -22,12 +22,16 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
-from ui_worker import LoadChannelWorker, CompareChannelsWorker, SingleChannelWorker
+from ui_worker import (
+    LoadChannelWorker, LoadMaxHoldWorker,
+    CompareChannelsWorker, SingleChannelWorker,
+)
 from ui_widgets import (
     HealthScoreDial, FilePickerRow,
     LoadingOverlay, LogPanel, MatplotlibCanvas, ChannelStore,
-    WaterfallControlBar,
+    WaterfallControlBar, ChannelEditDialog,
 )
+from models import DataType
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +105,18 @@ def _severity_color(sev: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PageDataManagement(QWidget):
-    """Veri yukleme ve yuklenmis kanallari yonetme sayfasi."""
+    """Veri yukleme + iki sekmeli kanal listesi sayfasi.
+
+    Sol tarafta iki kart bulunur:
+      - Waterfall / OT verisi yukle (mevcut akis)
+      - FFT Max Hold verisi yukle (cok-kanalli tek CSV)
+
+    Sag tarafta iki sekme bulunur:
+      - Waterfall / OT kanallari
+      - FFT Max Hold kanallari
+
+    Her listede her satir icin Duzenle ve Kaldir butonlari vardir.
+    """
 
     log_message = Signal(str, str)   # (msg, level)
 
@@ -109,209 +124,408 @@ class PageDataManagement(QWidget):
         super().__init__(parent)
         self.setObjectName("pageContent")
         self._store = store
-        self._worker: Optional[LoadChannelWorker] = None
+        self._wf_worker: Optional[LoadChannelWorker] = None
+        self._mh_worker: Optional[LoadMaxHoldWorker] = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 12, 20, 12)
         outer.setSpacing(12)
 
-        # Iki sutunlu yerlesim — sol: yukleme kart, sag: kanal listesi
+        # Iki sutunlu yerlesim — sol: iki yukleme karti, sag: sekmeli liste
         cols = QHBoxLayout()
         cols.setSpacing(16)
         outer.addLayout(cols, stretch=1)
 
-        # ── Sol: Veri yukleme kart ────────────────────────────────────────
+        # ── Sol: iki ust uste kart ────────────────────────────────────────
         left_wrap = QVBoxLayout()
         left_wrap.setSpacing(14)
         cols.addLayout(left_wrap, stretch=0)
 
-        upload_card, upload_body = _card("⬆️  Veri Yukle")
-        self._picker = FilePickerRow("Veri dosyasi:")
-        upload_body.addWidget(self._picker)
+        wf_card = self._build_waterfall_upload_card()
+        mh_card = self._build_max_hold_upload_card()
+        wf_card.setFixedWidth(420)
+        mh_card.setFixedWidth(420)
 
-        eng_edit = QLineEdit()
-        eng_edit.setPlaceholderText("ENG-042")
-        self._engine_id = eng_edit
-        upload_body.addLayout(_field_row("Motor ID:", eng_edit))
-
-        run_edit = QLineEdit()
-        run_edit.setPlaceholderText("RUN-001")
-        run_edit.setText("RUN-001")
-        self._run_id = run_edit
-        upload_body.addLayout(_field_row("Run ID:", run_edit))
-
-        from engine_config import LOCATION_CODES, LOCATION_NAMES
-        sensor_combo = QComboBox()
-        for code in LOCATION_CODES:
-            sensor_combo.addItem(f"{code}  —  {LOCATION_NAMES[code]}", code)
-        self._sensor_combo = sensor_combo
-        upload_body.addLayout(_field_row("Sensor lokasyonu:", sensor_combo))
-
-        axis_combo = QComboBox()
-        axis_combo.addItems(["X", "Y", "Z"])
-        self._axis_combo = axis_combo
-        upload_body.addLayout(_field_row("Eksen:", axis_combo))
-
-        self._load_btn = QPushButton("➕  Kanali Yukle")
-        self._load_btn.setObjectName("btnPrimary")
-        self._load_btn.setFixedHeight(40)
-        self._load_btn.clicked.connect(self._load_channel)
-        upload_body.addWidget(self._load_btn)
-
-        # auto-fill from filename if possible
-        self._picker.file_selected.connect(self._on_file_selected)
-
-        left_wrap.addWidget(upload_card)
+        left_wrap.addWidget(wf_card)
+        left_wrap.addWidget(mh_card)
         left_wrap.addStretch()
-        # Sabit genislik — sag tarafa yer birak
-        upload_card.setFixedWidth(420)
 
-        # ── Sag: Yuklenmis kanallar listesi ───────────────────────────────
+        # ── Sag: sekmeli kanal listeleri ──────────────────────────────────
         right_wrap = QVBoxLayout()
         right_wrap.setSpacing(14)
         cols.addLayout(right_wrap, stretch=1)
 
         list_card, list_body = _card("🗂️  Yuklenmis Kanallar")
 
-        # Filtre satiri
-        filter_row = QHBoxLayout()
-        flt_lbl = QLabel("🔎  Filtrele:")
-        flt_lbl.setObjectName("fieldLabel")
-        filter_row.addWidget(flt_lbl)
-        self._filter_edit = QLineEdit()
-        self._filter_edit.setPlaceholderText("Motor ID, lokasyon veya eksene gore ara...")
-        self._filter_edit.textChanged.connect(self._apply_filter)
-        filter_row.addWidget(self._filter_edit, stretch=1)
-        self._count_label = QLabel("0 kanal")
-        self._count_label.setObjectName("fieldLabel")
-        filter_row.addWidget(self._count_label)
-        list_body.addLayout(filter_row)
+        self._list_tabs = QTabWidget()
+        self._list_tabs.setObjectName("plotTabs")
+        list_body.addWidget(self._list_tabs, stretch=1)
 
-        # Kanal tablosu
-        self._channel_table = _make_table([
-            "Kanal", "Motor ID", "Lokasyon", "Eksen",
-            "Run ID", "RPM Aralıgi", "Slice", "İslem",
-        ])
-        hdr = self._channel_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        list_body.addWidget(self._channel_table, stretch=1)
+        # Waterfall / OT sekmesi
+        self._wf_tab_widget, self._wf_filter, self._wf_table, self._wf_count = (
+            self._build_channel_list_tab(
+                placeholder="Motor ID, lokasyon veya eksene gore ara...",
+                headers=[
+                    "Kanal", "Motor ID", "Lokasyon", "Eksen",
+                    "Run ID", "RPM Araligi", "Slice", "Duzenle", "Kaldir",
+                ],
+            )
+        )
+        self._list_tabs.addTab(self._wf_tab_widget, "🌊  Waterfall / OT")
+
+        # FFT Max Hold sekmesi
+        self._mh_tab_widget, self._mh_filter, self._mh_table, self._mh_count = (
+            self._build_channel_list_tab(
+                placeholder="Motor ID, kanal adi veya eksene gore ara...",
+                headers=[
+                    "Kanal", "Motor ID", "Lokasyon", "Eksen",
+                    "Run ID", "Freq Araligi", "N", "Duzenle", "Kaldir",
+                ],
+            )
+        )
+        self._list_tabs.addTab(self._mh_tab_widget, "📈  FFT Max Hold")
 
         right_wrap.addWidget(list_card, stretch=1)
 
-        # Store sinyallerine baglan
-        self._store.channel_added.connect(self._on_channel_added)
-        self._store.channel_removed.connect(self._on_channel_removed)
-
-        # key -> row index haritasi (dinamik olarak yeniden olusturulur)
-        self._row_keys: list[str] = []
+        # Store sinyallerine bagla — her degisimde her iki tabloyu yeniden cizdir
+        self._store.channel_added.connect(self._on_store_changed)
+        self._store.channel_removed.connect(self._on_store_changed)
 
         self._overlay = LoadingOverlay(self)
+
+        # Ilk doldurma
+        self._rebuild_tables()
 
     def resizeEvent(self, event):
         self._overlay.setGeometry(self.rect())
         super().resizeEvent(event)
 
-    # ── Dosya secimi sonrasi alan doldurma ────────────────────────────────
-    def _on_file_selected(self, path: str):
+    # ── Yukleme kartlari ──────────────────────────────────────────────────
+
+    def _build_waterfall_upload_card(self) -> QFrame:
+        card, body = _card("⬆️  Waterfall / OT Verisi Yukle")
+
+        self._wf_picker = FilePickerRow("Veri dosyasi:")
+        body.addWidget(self._wf_picker)
+
+        eng_edit = QLineEdit()
+        eng_edit.setPlaceholderText("ENG-042")
+        self._wf_engine_id = eng_edit
+        body.addLayout(_field_row("Motor ID:", eng_edit))
+
+        run_edit = QLineEdit()
+        run_edit.setPlaceholderText("RUN-001")
+        run_edit.setText("RUN-001")
+        self._wf_run_id = run_edit
+        body.addLayout(_field_row("Run ID:", run_edit))
+
+        from engine_config import LOCATION_CODES, LOCATION_NAMES
+        sensor_combo = QComboBox()
+        for code in LOCATION_CODES:
+            sensor_combo.addItem(f"{code}  —  {LOCATION_NAMES[code]}", code)
+        self._wf_sensor_combo = sensor_combo
+        body.addLayout(_field_row("Sensor lokasyonu:", sensor_combo))
+
+        axis_combo = QComboBox()
+        axis_combo.addItems(["X", "Y", "Z"])
+        self._wf_axis_combo = axis_combo
+        body.addLayout(_field_row("Eksen:", axis_combo))
+
+        self._wf_load_btn = QPushButton("➕  Kanali Yukle")
+        self._wf_load_btn.setObjectName("btnPrimary")
+        self._wf_load_btn.setFixedHeight(40)
+        self._wf_load_btn.clicked.connect(self._load_waterfall_channel)
+        body.addWidget(self._wf_load_btn)
+
+        self._wf_picker.file_selected.connect(self._on_wf_file_selected)
+        return card
+
+    def _build_max_hold_upload_card(self) -> QFrame:
+        card, body = _card("⬆️  FFT Max Hold Verisi Yukle")
+
+        hint = QLabel(
+            "Cok-kanalli CSV. Her sutun ayri kanal olarak yuklenir;\n"
+            "lokasyon ve eksen sutun basligindan tahmin edilir,\n"
+            "listede her zaman duzenlenebilir."
+        )
+        hint.setObjectName("fieldLabel")
+        hint.setWordWrap(True)
+        body.addWidget(hint)
+
+        self._mh_picker = FilePickerRow(
+            "Veri dosyasi:",
+            file_filter="CSV Dosyalari (*.csv);;Tum Dosyalar (*)",
+        )
+        body.addWidget(self._mh_picker)
+
+        eng_edit = QLineEdit()
+        eng_edit.setPlaceholderText("ENG-042")
+        self._mh_engine_id = eng_edit
+        body.addLayout(_field_row("Motor ID:", eng_edit))
+
+        run_edit = QLineEdit()
+        run_edit.setPlaceholderText("RUN-001")
+        run_edit.setText("RUN-001")
+        self._mh_run_id = run_edit
+        body.addLayout(_field_row("Run ID:", run_edit))
+
+        self._mh_load_btn = QPushButton("➕  Kanallari Yukle")
+        self._mh_load_btn.setObjectName("btnPrimary")
+        self._mh_load_btn.setFixedHeight(40)
+        self._mh_load_btn.clicked.connect(self._load_max_hold_channels)
+        body.addWidget(self._mh_load_btn)
+
+        self._mh_picker.file_selected.connect(self._on_mh_file_selected)
+        return card
+
+    # ── Liste sekmesi yardimci ─────────────────────────────────────────────
+
+    def _build_channel_list_tab(self, placeholder: str, headers: list[str]):
+        wrap = QWidget()
+        v = QVBoxLayout(wrap)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(8)
+
+        filter_row = QHBoxLayout()
+        flt_lbl = QLabel("🔎  Filtrele:")
+        flt_lbl.setObjectName("fieldLabel")
+        filter_row.addWidget(flt_lbl)
+        filter_edit = QLineEdit()
+        filter_edit.setPlaceholderText(placeholder)
+        filter_row.addWidget(filter_edit, stretch=1)
+        count_label = QLabel("0 kanal")
+        count_label.setObjectName("fieldLabel")
+        filter_row.addWidget(count_label)
+        v.addLayout(filter_row)
+
+        tbl = _make_table(headers)
+        hdr = tbl.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, len(headers)):
+            hdr.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        v.addWidget(tbl, stretch=1)
+
+        filter_edit.textChanged.connect(lambda _t: self._rebuild_tables())
+        return wrap, filter_edit, tbl, count_label
+
+    # ── Dosya secimi auto-fill ────────────────────────────────────────────
+
+    def _on_wf_file_selected(self, path: str):
         from importers import parse_filename
         parsed = parse_filename(Path(path))
         if not parsed:
             return
-        self._engine_id.setText(parsed["engine_id"])
-        self._run_id.setText(parsed["run_id"])
-        # Lokasyonu combo'da bul
+        self._wf_engine_id.setText(parsed["engine_id"])
+        self._wf_run_id.setText(parsed["run_id"])
         loc = parsed["location"]
-        for i in range(self._sensor_combo.count()):
-            if self._sensor_combo.itemData(i) == loc:
-                self._sensor_combo.setCurrentIndex(i)
+        for i in range(self._wf_sensor_combo.count()):
+            if self._wf_sensor_combo.itemData(i) == loc:
+                self._wf_sensor_combo.setCurrentIndex(i)
                 break
-        # Ekseni combo'da bul
-        ax = parsed["axis"]
-        idx_a = self._axis_combo.findText(ax)
+        idx_a = self._wf_axis_combo.findText(parsed["axis"])
         if idx_a >= 0:
-            self._axis_combo.setCurrentIndex(idx_a)
+            self._wf_axis_combo.setCurrentIndex(idx_a)
 
-    def _load_channel(self):
-        if not self._picker.path():
+    def _on_mh_file_selected(self, path: str):
+        from importers import parse_filename
+        parsed = parse_filename(Path(path))
+        if parsed:
+            self._mh_engine_id.setText(parsed["engine_id"])
+            self._mh_run_id.setText(parsed["run_id"])
+
+    # ── Waterfall yukleme ─────────────────────────────────────────────────
+
+    def _load_waterfall_channel(self):
+        if not self._wf_picker.path():
             QMessageBox.warning(self, "Eksik giris", "Lutfen veri dosyasi secin.")
             return
-        if not self._engine_id.text().strip():
+        if not self._wf_engine_id.text().strip():
             QMessageBox.warning(self, "Eksik giris", "Motor ID giriniz.")
             return
 
-        loc_code = self._sensor_combo.currentData() or self._sensor_combo.currentText().split()[0]
-        self._worker = LoadChannelWorker(
-            path            = self._picker.path(),
-            engine_id       = self._engine_id.text().strip(),
-            run_id          = self._run_id.text().strip() or "RUN-001",
+        loc_code = self._wf_sensor_combo.currentData() \
+            or self._wf_sensor_combo.currentText().split()[0]
+        self._wf_worker = LoadChannelWorker(
+            path            = self._wf_picker.path(),
+            engine_id       = self._wf_engine_id.text().strip(),
+            run_id          = self._wf_run_id.text().strip() or "RUN-001",
             sensor_location = loc_code,
-            axis            = self._axis_combo.currentText(),
+            axis            = self._wf_axis_combo.currentText(),
         )
-        self._worker.progress.connect(lambda m: self.log_message.emit(m, "INFO"))
-        self._worker.finished.connect(self._on_load_done)
-        self._worker.error.connect(self._on_load_error)
+        self._wf_worker.progress.connect(lambda m: self.log_message.emit(m, "INFO"))
+        self._wf_worker.finished.connect(self._on_wf_load_done)
+        self._wf_worker.error.connect(self._on_wf_load_error)
 
-        self._load_btn.setEnabled(False)
-        self._overlay.show_loading("Kanal yukleniyor...",
-                                   Path(self._picker.path()).name)
-        self._worker.start()
+        self._wf_load_btn.setEnabled(False)
+        self._overlay.show_loading(
+            "Kanal yukleniyor...", Path(self._wf_picker.path()).name,
+        )
+        self._wf_worker.start()
 
-    def _on_load_done(self, run):
+    def _on_wf_load_done(self, run):
         self._overlay.hide_loading()
-        self._load_btn.setEnabled(True)
+        self._wf_load_btn.setEnabled(True)
         key = self._store.add(run)
         self.log_message.emit(f"✓ Kanal eklendi: {key}", "SUCCESS")
 
-    def _on_load_error(self, msg: str):
+    def _on_wf_load_error(self, msg: str):
         self._overlay.hide_loading()
-        self._load_btn.setEnabled(True)
+        self._wf_load_btn.setEnabled(True)
         self.log_message.emit(f"✕ Yukleme hatasi: {msg.splitlines()[0]}", "ERROR")
         QMessageBox.critical(self, "Yukleme Hatasi", msg[:400])
 
+    # ── FFT Max Hold yukleme ──────────────────────────────────────────────
+
+    def _load_max_hold_channels(self):
+        if not self._mh_picker.path():
+            QMessageBox.warning(self, "Eksik giris",
+                                "Lutfen FFT Max Hold dosyasini secin.")
+            return
+        if not self._mh_engine_id.text().strip():
+            QMessageBox.warning(self, "Eksik giris", "Motor ID giriniz.")
+            return
+
+        self._mh_worker = LoadMaxHoldWorker(
+            path      = self._mh_picker.path(),
+            engine_id = self._mh_engine_id.text().strip(),
+            run_id    = self._mh_run_id.text().strip() or "RUN-001",
+        )
+        self._mh_worker.progress.connect(lambda m: self.log_message.emit(m, "INFO"))
+        self._mh_worker.finished.connect(self._on_mh_load_done)
+        self._mh_worker.error.connect(self._on_mh_load_error)
+
+        self._mh_load_btn.setEnabled(False)
+        self._overlay.show_loading(
+            "Max Hold kanallari yukleniyor...",
+            Path(self._mh_picker.path()).name,
+        )
+        self._mh_worker.start()
+
+    def _on_mh_load_done(self, runs):
+        self._overlay.hide_loading()
+        self._mh_load_btn.setEnabled(True)
+        keys = [self._store.add(r) for r in runs]
+        self.log_message.emit(
+            f"✓ {len(keys)} Max Hold kanali eklendi", "SUCCESS",
+        )
+        # Eklenen kanallar genelde Max Hold sekmesinde — kullaniciyi oraya gotur
+        self._list_tabs.setCurrentIndex(1)
+
+    def _on_mh_load_error(self, msg: str):
+        self._overlay.hide_loading()
+        self._mh_load_btn.setEnabled(True)
+        self.log_message.emit(f"✕ Max Hold yukleme hatasi: {msg.splitlines()[0]}", "ERROR")
+        QMessageBox.critical(self, "Yukleme Hatasi", msg[:400])
+
     # ── Tablo yonetimi ────────────────────────────────────────────────────
-    def _on_channel_added(self, key: str, run):
-        self._rebuild_table()
 
-    def _on_channel_removed(self, key: str):
-        self._rebuild_table()
+    def _on_store_changed(self, *_args):
+        self._rebuild_tables()
 
-    def _rebuild_table(self):
-        self._channel_table.setRowCount(0)
-        self._row_keys.clear()
-        query = self._filter_edit.text().strip().lower()
+    def _rebuild_tables(self):
+        self._rebuild_waterfall_table()
+        self._rebuild_max_hold_table()
+
+    def _rebuild_waterfall_table(self):
+        tbl   = self._wf_table
+        query = self._wf_filter.text().strip().lower()
+        tbl.setRowCount(0)
 
         for key, run in self._store.items():
+            if run.data_type == DataType.FFT_MAX_HOLD:
+                continue
             if query and query not in key.lower():
                 continue
-            row = self._channel_table.rowCount()
-            self._channel_table.insertRow(row)
-            self._row_keys.append(key)
 
+            row = tbl.rowCount()
+            tbl.insertRow(row)
             rpm_lo, rpm_hi = run.rpm_range
-            self._channel_table.setItem(row, 0, _table_item(key, "#e6edf3"))
-            self._channel_table.setItem(row, 1, _table_item(run.engine_id, "#58a6ff", bold=True))
-            self._channel_table.setItem(row, 2, _table_item(run.sensor_location))
-            self._channel_table.setItem(row, 3, _table_item(run.axis))
-            self._channel_table.setItem(row, 4, _table_item(run.run_id))
-            self._channel_table.setItem(row, 5, _table_item(f"{rpm_lo:.0f}–{rpm_hi:.0f}"))
-            self._channel_table.setItem(row, 6, _table_item(str(run.n_slices)))
+            tbl.setItem(row, 0, _table_item(key, "#e6edf3"))
+            tbl.setItem(row, 1, _table_item(run.engine_id, "#58a6ff", bold=True))
+            tbl.setItem(row, 2, _table_item(run.sensor_location))
+            tbl.setItem(row, 3, _table_item(run.axis))
+            tbl.setItem(row, 4, _table_item(run.run_id))
+            tbl.setItem(row, 5, _table_item(f"{rpm_lo:.0f}–{rpm_hi:.0f}"))
+            tbl.setItem(row, 6, _table_item(str(run.n_slices)))
+            tbl.setCellWidget(row, 7, self._make_edit_btn(key, with_location_combo=True))
+            tbl.setCellWidget(row, 8, self._make_remove_btn(key))
 
-            btn = QPushButton("🗑  Kaldir")
-            btn.setObjectName("btnBrowse")
-            btn.clicked.connect(lambda _checked=False, k=key: self._store.remove(k))
-            self._channel_table.setCellWidget(row, 7, btn)
+        self._wf_count.setText(f"{tbl.rowCount()} kanal")
 
-        self._count_label.setText(f"{self._channel_table.rowCount()} kanal")
+    def _rebuild_max_hold_table(self):
+        tbl   = self._mh_table
+        query = self._mh_filter.text().strip().lower()
+        tbl.setRowCount(0)
 
-    def _apply_filter(self, _text: str):
-        self._rebuild_table()
+        for key, run in self._store.items():
+            if run.data_type != DataType.FFT_MAX_HOLD:
+                continue
+            if query and query not in key.lower():
+                continue
+
+            row = tbl.rowCount()
+            tbl.insertRow(row)
+            freqs = run.frequencies
+            f_lo  = float(freqs.min()) if freqs.size else 0.0
+            f_hi  = float(freqs.max()) if freqs.size else 0.0
+            tbl.setItem(row, 0, _table_item(key, "#e6edf3"))
+            tbl.setItem(row, 1, _table_item(run.engine_id, "#58a6ff", bold=True))
+            tbl.setItem(row, 2, _table_item(run.sensor_location))
+            tbl.setItem(row, 3, _table_item(run.axis))
+            tbl.setItem(row, 4, _table_item(run.run_id))
+            tbl.setItem(row, 5, _table_item(f"{f_lo:.0f}–{f_hi:.0f} Hz"))
+            tbl.setItem(row, 6, _table_item(str(int(freqs.size))))
+            tbl.setCellWidget(row, 7, self._make_edit_btn(key, with_location_combo=False))
+            tbl.setCellWidget(row, 8, self._make_remove_btn(key))
+
+        self._mh_count.setText(f"{tbl.rowCount()} kanal")
+
+    def _make_remove_btn(self, key: str) -> QPushButton:
+        btn = QPushButton("🗑  Kaldir")
+        btn.setObjectName("btnBrowse")
+        btn.clicked.connect(lambda _c=False, k=key: self._store.remove(k))
+        return btn
+
+    def _make_edit_btn(self, key: str, with_location_combo: bool) -> QPushButton:
+        btn = QPushButton("✏  Duzenle")
+        btn.setObjectName("btnBrowse")
+        btn.clicked.connect(
+            lambda _c=False, k=key, lc=with_location_combo: self._edit_channel(k, lc)
+        )
+        return btn
+
+    def _edit_channel(self, key: str, with_location_combo: bool):
+        run = self._store.get(key)
+        if run is None:
+            return
+
+        loc_options = None
+        if with_location_combo:
+            from engine_config import LOCATION_CODES, LOCATION_NAMES
+            loc_options = [(c, LOCATION_NAMES[c]) for c in LOCATION_CODES]
+
+        result = ChannelEditDialog.run(
+            self,
+            engine_id=run.engine_id,
+            run_id=run.run_id,
+            sensor_location=run.sensor_location,
+            axis=run.axis,
+            location_options=loc_options,
+        )
+        if result is None:
+            return
+
+        new_key = self._store.update(
+            key,
+            engine_id       = result["engine_id"],
+            run_id          = result["run_id"],
+            sensor_location = result["sensor_location"],
+            axis            = result["axis"],
+        )
+        if new_key != key:
+            self.log_message.emit(
+                f"✎  Kanal guncellendi: {key} -> {new_key}", "INFO",
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -562,8 +776,16 @@ class PageAnalysis(QWidget):
         return lbl
 
     def _refresh_combos(self, *_args):
-        """Store icerigi degisince tum motor + kanal combo'lari guncellenir."""
-        engines = sorted({r.engine_id for _, r in self._store.items()})
+        """Store icerigi degisince tum motor + kanal combo'lari guncellenir.
+
+        Analiz akisi waterfall/order tipi kanallar uzerinde calistigi icin
+        FFT Max Hold kanallari combobox'larda gosterilmez (waterfall isleme
+        akisi degisiklik yapilmadan korunur).
+        """
+        engines = sorted({
+            r.engine_id for _, r in self._store.items()
+            if r.data_type != DataType.FFT_MAX_HOLD
+        })
         for combo in (self._single_motor, self._ref_motor, self._main_motor):
             cur = combo.currentText()
             combo.blockSignals(True)
@@ -580,7 +802,10 @@ class PageAnalysis(QWidget):
     def _refresh_channel_combo(self, motor_combo: QComboBox,
                                channel_combo: QComboBox):
         motor = motor_combo.currentText()
-        keys = [k for k, r in self._store.items() if r.engine_id == motor]
+        keys = [
+            k for k, r in self._store.items()
+            if r.engine_id == motor and r.data_type != DataType.FFT_MAX_HOLD
+        ]
         cur = channel_combo.currentText()
         channel_combo.blockSignals(True)
         channel_combo.clear()

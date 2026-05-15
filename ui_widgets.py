@@ -631,6 +631,56 @@ class ChannelStore(QObject):
             del self._channels[key]
             self.channel_removed.emit(key)
 
+    def update(
+        self,
+        old_key: str,
+        engine_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        sensor_location: Optional[str] = None,
+        axis: Optional[str] = None,
+    ) -> str:
+        """Bir kanalin anahtar alanlarini gunceller.
+
+        Anahtar alanlar (engine_id / run_id / sensor_location / axis) degisirse
+        kanal eski anahtarla kaldirilip yeni anahtarla yeniden eklenir; bu
+        sayede ``channel_removed`` ve ``channel_added`` sinyalleri normal yolla
+        yayinlanir (DuckDB senkronizasyonu bu yolu izler).
+
+        Yeni anahtari dondurur (degisim olmadiysa ``old_key`` ile ayni).
+        """
+        run = self._channels.get(old_key)
+        if run is None:
+            return old_key
+
+        if engine_id is not None:
+            run.engine_id = engine_id.strip() or run.engine_id
+        if run_id is not None:
+            run.run_id = run_id.strip() or run.run_id
+        if sensor_location is not None:
+            run.sensor_location = sensor_location.strip() or run.sensor_location
+        if axis is not None:
+            run.axis = axis.strip().upper() or run.axis
+
+        new_key = self.make_key(run)
+        if new_key == old_key:
+            # Alanlar mantiksal olarak ayni — sadece varsa metadata guncelle
+            return old_key
+
+        del self._channels[old_key]
+        self.channel_removed.emit(old_key)
+        return self._reinsert(run)
+
+    def _reinsert(self, run: EngineRun) -> str:
+        key  = self.make_key(run)
+        base = key
+        n = 2
+        while key in self._channels:
+            key = f"{base}  (#{n})"
+            n += 1
+        self._channels[key] = run
+        self.channel_added.emit(key, run)
+        return key
+
     def get(self, key: str) -> Optional[EngineRun]:
         return self._channels.get(key)
 
@@ -664,3 +714,123 @@ class TopTabButton(QPushButton):
         self.setProperty("active", "true" if active else "false")
         self.style().unpolish(self)
         self.style().polish(self)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  CHANNEL EDIT DIALOG  (kanal metadata duzenleme)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ChannelEditDialog(QObject):
+    """Kanal metadata duzenleme dialogu icin yardimci olusturucu.
+
+    QDialog dogrudan ``ui_widgets.py``'ye ait olmadigi icin, kucuk bir
+    fonksiyon olarak sariyoruz; ``ChannelEditDialog.run(...)`` cagrilir,
+    kullanici tamam ya da iptal eder; donus None ya da dict.
+    """
+
+    @staticmethod
+    def run(
+        parent,
+        engine_id: str,
+        run_id: str,
+        sensor_location: str,
+        axis: str,
+        location_options: Optional[list] = None,
+    ) -> Optional[dict]:
+        """Duzenleme dialogu ac; kullanici onaylarsa yeni alanlar dict
+        olarak donar (engine_id, run_id, sensor_location, axis). Iptal ya
+        da hicbir alan degismediyse ``None``.
+
+        ``location_options`` verildiyse sensor lokasyonu icin combobox
+        kullanilir (waterfall kanallar); aksi halde serbest metin alani
+        (FFT Max Hold kanallari).
+        """
+        from PySide6.QtWidgets import (
+            QDialog, QFormLayout, QLineEdit, QComboBox, QDialogButtonBox,
+            QVBoxLayout, QLabel,
+        )
+
+        dlg = QDialog(parent)
+        dlg.setWindowTitle("Kanali Duzenle")
+        dlg.setModal(True)
+        dlg.resize(420, 220)
+
+        outer = QVBoxLayout(dlg)
+        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setSpacing(10)
+
+        title = QLabel("Kanal metadata'sini duzenle")
+        title.setObjectName("cardTitle")
+        outer.addWidget(title)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+
+        eng_edit = QLineEdit(engine_id)
+        run_edit = QLineEdit(run_id)
+
+        if location_options:
+            loc_widget = QComboBox()
+            for code, name in location_options:
+                loc_widget.addItem(f"{code}  —  {name}", code)
+            # Mevcut degeri sec
+            idx = next(
+                (i for i in range(loc_widget.count())
+                 if loc_widget.itemData(i) == sensor_location),
+                -1,
+            )
+            if idx >= 0:
+                loc_widget.setCurrentIndex(idx)
+            else:
+                loc_widget.addItem(sensor_location, sensor_location)
+                loc_widget.setCurrentIndex(loc_widget.count() - 1)
+        else:
+            loc_widget = QLineEdit(sensor_location)
+
+        axis_combo = QComboBox()
+        axis_combo.addItems(["X", "Y", "Z"])
+        idx_ax = axis_combo.findText((axis or "X").upper())
+        if idx_ax >= 0:
+            axis_combo.setCurrentIndex(idx_ax)
+
+        form.addRow("Motor ID:", eng_edit)
+        form.addRow("Run ID:", run_edit)
+        form.addRow("Lokasyon:", loc_widget)
+        form.addRow("Eksen:", axis_combo)
+        outer.addLayout(form)
+
+        bb = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        bb.button(QDialogButtonBox.Ok).setText("Kaydet")
+        bb.button(QDialogButtonBox.Cancel).setText("Iptal")
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        outer.addWidget(bb)
+
+        if dlg.exec() != QDialog.Accepted:
+            return None
+
+        from PySide6.QtWidgets import QComboBox as _Cb
+        if isinstance(loc_widget, _Cb):
+            new_loc = loc_widget.currentData() or loc_widget.currentText().split()[0]
+        else:
+            new_loc = loc_widget.text().strip()
+
+        new_eng  = eng_edit.text().strip() or engine_id
+        new_run  = run_edit.text().strip() or run_id
+        new_ax   = axis_combo.currentText().strip().upper() or axis
+
+        # Hicbir alan degismediyse None don
+        if (new_eng == engine_id and new_run == run_id
+                and new_loc == sensor_location and new_ax == axis.upper()):
+            return None
+
+        return {
+            "engine_id": new_eng,
+            "run_id": new_run,
+            "sensor_location": new_loc,
+            "axis": new_ax,
+        }

@@ -12,7 +12,7 @@ from PySide6.QtCore import QThread, Signal
 
 from models import DataType, EngineRun
 from engine_config import ORDER_DEFINITIONS
-from importers import ImporterFactory
+from importers import ImporterFactory, load_max_hold_csv
 from analysis import build_default_analyzer, OrderExtractor
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,48 @@ class CompareChannelsWorker(QThread):
 # ---------------------------------------------------------------------------
 #  TEK KANAL ON HESAPLAMA
 # ---------------------------------------------------------------------------
+
+class LoadMaxHoldWorker(QThread):
+    """Cok-kanalli FFT Max Hold CSV dosyasini arkaplanda yukler.
+
+    Sinyaller:
+      progress(str)
+      finished(list[EngineRun])
+      error(str)
+    """
+
+    progress = Signal(str)
+    finished = Signal(object)   # list[EngineRun]
+    error    = Signal(str)
+
+    def __init__(
+        self,
+        path: str,
+        engine_id: str,
+        run_id: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._path   = path
+        self._engine = engine_id
+        self._run    = run_id
+
+    def run(self):
+        try:
+            self.progress.emit(f"Yukleniyor: {Path(self._path).name}")
+            runs = load_max_hold_csv(
+                Path(self._path),
+                engine_id=self._engine,
+                run_id=self._run,
+            )
+            if not runs:
+                raise ValueError("Kanal bulunamadi.")
+            self.progress.emit(f"{len(runs)} kanal cozumlendi.")
+            self.finished.emit(runs)
+        except Exception as exc:
+            logger.error("LoadMaxHoldWorker hatasi: %s", exc)
+            self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")
+
 
 class SingleChannelWorker(QThread):
     """
