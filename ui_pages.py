@@ -303,6 +303,9 @@ class PageDataManagement(QWidget):
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
         for i in range(1, len(headers)):
             hdr.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        vhdr = tbl.verticalHeader()
+        vhdr.setSectionResizeMode(QHeaderView.Fixed)
+        vhdr.setDefaultSectionSize(38)
         v.addWidget(tbl, stretch=1)
 
         filter_edit.textChanged.connect(lambda _t: self._rebuild_tables())
@@ -480,19 +483,33 @@ class PageDataManagement(QWidget):
 
         self._mh_count.setText(f"{tbl.rowCount()} kanal")
 
-    def _make_remove_btn(self, key: str) -> QPushButton:
+    def _make_remove_btn(self, key: str) -> QWidget:
         btn = QPushButton("🗑  Kaldir")
         btn.setObjectName("btnBrowse")
+        btn.setFixedHeight(26)
         btn.clicked.connect(lambda _c=False, k=key: self._store.remove(k))
-        return btn
+        return self._cell_wrap(btn)
 
-    def _make_edit_btn(self, key: str, with_location_combo: bool) -> QPushButton:
+    def _make_edit_btn(self, key: str, with_location_combo: bool) -> QWidget:
         btn = QPushButton("✏  Duzenle")
         btn.setObjectName("btnBrowse")
+        btn.setFixedHeight(26)
         btn.clicked.connect(
             lambda _c=False, k=key, lc=with_location_combo: self._edit_channel(k, lc)
         )
-        return btn
+        return self._cell_wrap(btn)
+
+    @staticmethod
+    def _cell_wrap(widget: QWidget) -> QWidget:
+        """Hucre widget'ini sifir kenar bosluklu, dikey ortalanmis bir
+        kapsayiciya alir. Boylece buton, satirdaki metin hucreleriyle ayni
+        dikey hizada kalir (aksi halde min-height nedeniyle kayma olusur)."""
+        cont = QWidget()
+        lay = QHBoxLayout(cont)
+        lay.setContentsMargins(4, 0, 4, 0)
+        lay.setSpacing(0)
+        lay.addWidget(widget, alignment=Qt.AlignVCenter)
+        return cont
 
     def _edit_channel(self, key: str, with_location_combo: bool):
         run = self._store.get(key)
