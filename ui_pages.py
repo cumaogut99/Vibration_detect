@@ -25,11 +25,13 @@ from PySide6.QtGui import QColor
 from ui_worker import (
     LoadChannelWorker, LoadMaxHoldWorker,
     CompareChannelsWorker, SingleChannelWorker,
+    MaxHoldCompareWorker,
 )
 from ui_widgets import (
     HealthScoreDial, FilePickerRow,
     LoadingOverlay, LogPanel, MatplotlibCanvas, ChannelStore,
     WaterfallControlBar, ChannelEditDialog,
+    MaxHoldSpectrumView, MaxHoldRatioView,
 )
 from models import DataType
 
@@ -1087,6 +1089,317 @@ class DiagnosisPanel(QWidget):
         recs = "\n\n".join(f"→ {r}" for r in report.recommendations) \
             or "Anormallik tespit edilmedi."
         self._rec_text.setPlainText(recs)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAGE: MAX HOLD  (FFT Max Hold goruntuleme + bant-maks karsilastirma)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PageMaxHold(QWidget):
+    """FFT Max Hold kanallarinin goruntulenmesi ve bant-maks analizi.
+
+    Tek Kanal modu: secili kanalin max-hold spektrumu.
+    Karsilastirma modu: olculen vs referans -> spektrum ust uste +
+    order bant-maks oranlari + tani karti + tani paneli.
+
+    RPM araligi (varsayilan 1690–3887) order bantlarini belirler:
+    band_N = [N·rpm_min/60, N·rpm_max/60].
+    """
+
+    log_message = Signal(str, str)
+
+    DEFAULT_RPM_MIN = 1690.0
+    DEFAULT_RPM_MAX = 3887.0
+
+    def __init__(self, store: ChannelStore, parent=None):
+        super().__init__(parent)
+        self.setObjectName("pageContent")
+        self._store = store
+        self._worker = None
+        self._cur_meas = None
+        self._cur_ref = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 12, 20, 12)
+        outer.setSpacing(10)
+
+        # ── Ust kontrol satiri ────────────────────────────────────────────
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        outer.addLayout(top)
+
+        self._rb_single  = QRadioButton("Tek Kanal")
+        self._rb_compare = QRadioButton("Karsilastirma")
+        self._rb_single.setChecked(True)
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.addButton(self._rb_single, 0)
+        self._mode_group.addButton(self._rb_compare, 1)
+        self._mode_group.idToggled.connect(self._on_mode_changed)
+        top.addWidget(self._rb_single)
+        top.addWidget(self._rb_compare)
+
+        top.addWidget(self._vsep())
+
+        # RPM araligi
+        top.addWidget(self._mklabel("RPM:"))
+        self._rpm_min = QLineEdit()
+        self._rpm_min.setPlaceholderText("min")
+        self._rpm_min.setText(f"{self.DEFAULT_RPM_MIN:.0f}")
+        self._rpm_min.setFixedWidth(72)
+        self._rpm_max = QLineEdit()
+        self._rpm_max.setPlaceholderText("max")
+        self._rpm_max.setText(f"{self.DEFAULT_RPM_MAX:.0f}")
+        self._rpm_max.setFixedWidth(72)
+        top.addWidget(self._rpm_min)
+        top.addWidget(self._mklabel("–"))
+        top.addWidget(self._rpm_max)
+
+        top.addWidget(self._vsep())
+
+        # Secici yiginlari
+        self._selector_stack = QStackedWidget()
+        top.addWidget(self._selector_stack, stretch=1)
+
+        # Tek kanal: Motor + Kanal
+        sw = QWidget()
+        swl = QHBoxLayout(sw)
+        swl.setContentsMargins(0, 0, 0, 0)
+        swl.setSpacing(8)
+        swl.addWidget(self._mklabel("Motor:"))
+        self._s_motor = QComboBox()
+        self._s_motor.setMinimumWidth(110)
+        self._s_motor.currentTextChanged.connect(
+            lambda _t: self._refresh_channel_combo(self._s_motor, self._s_chan))
+        swl.addWidget(self._s_motor)
+        swl.addWidget(self._mklabel("Kanal:"))
+        self._s_chan = QComboBox()
+        self._s_chan.setMinimumWidth(220)
+        swl.addWidget(self._s_chan)
+        swl.addStretch()
+        self._selector_stack.addWidget(sw)
+
+        # Karsilastirma: Ref + Ana
+        cw = QWidget()
+        cwl = QHBoxLayout(cw)
+        cwl.setContentsMargins(0, 0, 0, 0)
+        cwl.setSpacing(8)
+        cwl.addWidget(self._mklabel("Ref Motor:"))
+        self._r_motor = QComboBox()
+        self._r_motor.setMinimumWidth(100)
+        self._r_motor.currentTextChanged.connect(
+            lambda _t: self._refresh_channel_combo(self._r_motor, self._r_chan))
+        cwl.addWidget(self._r_motor)
+        cwl.addWidget(self._mklabel("Ref Kanal:"))
+        self._r_chan = QComboBox()
+        self._r_chan.setMinimumWidth(180)
+        cwl.addWidget(self._r_chan)
+        cwl.addWidget(self._vsep())
+        cwl.addWidget(self._mklabel("Ana Motor:"))
+        self._m_motor = QComboBox()
+        self._m_motor.setMinimumWidth(100)
+        self._m_motor.currentTextChanged.connect(
+            lambda _t: self._refresh_channel_combo(self._m_motor, self._m_chan))
+        cwl.addWidget(self._m_motor)
+        cwl.addWidget(self._mklabel("Ana Kanal:"))
+        self._m_chan = QComboBox()
+        self._m_chan.setMinimumWidth(180)
+        cwl.addWidget(self._m_chan)
+        cwl.addStretch()
+        self._selector_stack.addWidget(cw)
+
+        self._single_btn = QPushButton("▶  Goruntule")
+        self._single_btn.setObjectName("btnPrimary")
+        self._single_btn.clicked.connect(self._run_single)
+        self._compare_btn = QPushButton("▶  Karsilastir")
+        self._compare_btn.setObjectName("btnPrimary")
+        self._compare_btn.clicked.connect(self._run_compare)
+        top.addWidget(self._single_btn)
+        top.addWidget(self._compare_btn)
+
+        # ── Sonuc bolumu ──────────────────────────────────────────────────
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(6)
+        outer.addWidget(splitter, stretch=1)
+
+        self._plot_tabs = QTabWidget()
+        self._plot_tabs.setObjectName("plotTabs")
+        splitter.addWidget(self._plot_tabs)
+
+        # pyqtgraph tabanli — fare ile zoom/pan, sag-tik menu
+        self._spec_view  = MaxHoldSpectrumView()
+        self._ratio_view = MaxHoldRatioView()
+
+        diag_scroll = QScrollArea()
+        diag_scroll.setWidgetResizable(True)
+        diag_scroll.setFrameShape(QFrame.NoFrame)
+        self._diag = DiagnosisPanel()
+        diag_scroll.setWidget(self._diag)
+        splitter.addWidget(diag_scroll)
+        self._diag_scroll = diag_scroll
+
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+
+        self._store.channel_added.connect(self._refresh_combos)
+        self._store.channel_removed.connect(self._refresh_combos)
+
+        self._on_mode_changed(0, True)
+        self._refresh_combos()
+
+        self._overlay = LoadingOverlay(self)
+
+    # ── Yardimcilar ───────────────────────────────────────────────────────
+    @staticmethod
+    def _mklabel(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("fieldLabel")
+        return lbl
+
+    @staticmethod
+    def _vsep() -> QFrame:
+        s = QFrame()
+        s.setFrameShape(QFrame.VLine)
+        s.setFixedHeight(28)
+        s.setStyleSheet("color:#30363d;")
+        return s
+
+    def resizeEvent(self, event):
+        self._overlay.setGeometry(self.rect())
+        super().resizeEvent(event)
+
+    def _rpm_range(self):
+        def _f(le, default):
+            try:
+                return float(le.text().strip().replace(",", "."))
+            except ValueError:
+                return default
+        lo = _f(self._rpm_min, self.DEFAULT_RPM_MIN)
+        hi = _f(self._rpm_max, self.DEFAULT_RPM_MAX)
+        if hi <= lo:
+            lo, hi = self.DEFAULT_RPM_MIN, self.DEFAULT_RPM_MAX
+        return lo, hi
+
+    # ── Mod degisimi ──────────────────────────────────────────────────────
+    def _on_mode_changed(self, idx: int, checked: bool):
+        if not checked:
+            return
+        self._selector_stack.setCurrentIndex(idx)
+        self._single_btn.setVisible(idx == 0)
+        self._compare_btn.setVisible(idx == 1)
+
+        while self._plot_tabs.count():
+            self._plot_tabs.removeTab(0)
+
+        if idx == 0:
+            self._plot_tabs.addTab(self._spec_view, "📈  Spektrum")
+            self._diag_scroll.setVisible(False)
+        else:
+            self._plot_tabs.addTab(self._spec_view,  "📈  Spektrum (Ust uste)")
+            self._plot_tabs.addTab(self._ratio_view, "📊  Order Bant-Maks")
+            self._diag_scroll.setVisible(True)
+
+    # ── Combo guncelleme (sadece FFT Max Hold kanallari) ──────────────────
+    def _refresh_combos(self, *_args):
+        engines = sorted({
+            r.engine_id for _, r in self._store.items()
+            if r.data_type == DataType.FFT_MAX_HOLD
+        })
+        for combo in (self._s_motor, self._r_motor, self._m_motor):
+            cur = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(engines)
+            if cur in engines:
+                combo.setCurrentText(cur)
+            combo.blockSignals(False)
+        self._refresh_channel_combo(self._s_motor, self._s_chan)
+        self._refresh_channel_combo(self._r_motor, self._r_chan)
+        self._refresh_channel_combo(self._m_motor, self._m_chan)
+
+    def _refresh_channel_combo(self, motor_combo: QComboBox,
+                               channel_combo: QComboBox):
+        motor = motor_combo.currentText()
+        keys = [
+            k for k, r in self._store.items()
+            if r.engine_id == motor and r.data_type == DataType.FFT_MAX_HOLD
+        ]
+        cur = channel_combo.currentText()
+        channel_combo.blockSignals(True)
+        channel_combo.clear()
+        channel_combo.addItems(keys)
+        if cur in keys:
+            channel_combo.setCurrentText(cur)
+        channel_combo.blockSignals(False)
+
+    # ── Tek kanal goruntule ───────────────────────────────────────────────
+    def _run_single(self):
+        key = self._s_chan.currentText()
+        run = self._store.get(key) if key else None
+        if run is None:
+            QMessageBox.warning(self, "Eksik giris",
+                                "Once Veri Yonetimi'nden bir Max Hold kanali yukleyin.")
+            return
+        try:
+            self._spec_view.set_data(run)
+            self.log_message.emit(f"✓ {key} spektrumu cizildi", "SUCCESS")
+        except Exception as exc:
+            logger.warning("Max hold spektrum hatasi: %s", exc)
+            QMessageBox.critical(self, "Hata", str(exc)[:400])
+
+    # ── Karsilastirma ─────────────────────────────────────────────────────
+    def _run_compare(self):
+        ref_key  = self._r_chan.currentText()
+        meas_key = self._m_chan.currentText()
+        ref_run  = self._store.get(ref_key)  if ref_key  else None
+        meas_run = self._store.get(meas_key) if meas_key else None
+        if ref_run is None or meas_run is None:
+            QMessageBox.warning(self, "Eksik giris",
+                                "Karsilastirma icin iki Max Hold kanali secin.")
+            return
+        if ref_key == meas_key:
+            QMessageBox.warning(self, "Gecersiz secim",
+                                "Referans ve ana kanal ayni olamaz.")
+            return
+
+        ref_run.is_reference = True
+        rpm_lo, rpm_hi = self._rpm_range()
+
+        self._worker = MaxHoldCompareWorker(
+            meas_run, ref_run, rpm_min=rpm_lo, rpm_max=rpm_hi,
+        )
+        self._worker.progress.connect(lambda m: self.log_message.emit(m, "INFO"))
+        self._worker.finished.connect(self._on_compare_done)
+        self._worker.error.connect(self._on_error)
+
+        self._compare_btn.setEnabled(False)
+        self._overlay.show_loading("Bant-maks analizi...", meas_key)
+        self._worker.start()
+
+    def _on_compare_done(self, report, bands, meas_run, ref_run):
+        self._overlay.hide_loading()
+        self._compare_btn.setEnabled(True)
+
+        try:
+            self._spec_view.set_data(meas_run, ref_run)
+        except Exception as exc:
+            logger.warning("Spektrum hatasi: %s", exc)
+        try:
+            self._ratio_view.set_bands(bands)
+        except Exception as exc:
+            logger.warning("Oran grafigi hatasi: %s", exc)
+
+        self._diag.set_report(report)
+        self.log_message.emit(
+            f"✓ Bant-maks tamam — Skor {report.overall_health_score:.0f}/100 "
+            f"· {len(report.anomalies)} anomali",
+            "SUCCESS",
+        )
+
+    def _on_error(self, msg: str):
+        self._overlay.hide_loading()
+        self._compare_btn.setEnabled(True)
+        self.log_message.emit(f"✕ Hata: {msg.splitlines()[0]}", "ERROR")
+        QMessageBox.critical(self, "Hata", msg[:400])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -525,3 +525,212 @@ def build_default_analyzer() -> VibrationAnalyzer:
         diagnostic_engine=FaultDiagnosticEngine(),
         scorer=HealthScorer(),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  FFT MAX HOLD — BAND-MAKS ANALIZI  (waterfall akisindan tamamen bagimsiz)
+#
+#  Max-hold spektrumu tum RPM sweep'ini tek spektruma cokertir; RPM↔frekans
+#  bagi kaybolur. Bilinen RPM araligi [rpm_min, rpm_max] verildiginde her
+#  order N su frekans bandini supurur:
+#
+#     band_N = [N * rpm_min / 60 ,  N * rpm_max / 60]
+#
+#  O bandin maksimum genligi, o order'in max-hold seviyesi kabul edilir.
+#  Olculen vs referans bant-maks orani mevcut FAULT_SIGNATURES /
+#  ALERT_THRESHOLDS / HealthScorer altyapisina beslenir.
+#
+#  Kisitlama: RPM araligi genis oldugunda komsu order bantlari cakisir;
+#  bu yuzden bulgular order-ailesi/frekans-bolgesi olarak yorumlanmalidir.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from dataclasses import dataclass
+
+
+@dataclass
+class MaxHoldBand:
+    """Tek bir order icin bant-maks ozeti."""
+    order: float
+    band_lo_hz: float
+    band_hi_hz: float
+    measured_amp: float
+    reference_amp: Optional[float]
+    measured_freq_hz: float          # bant-maks'in gozlendigi frekans
+    implied_rpm: float               # 60 * freq / order
+    ratio: Optional[float]
+
+
+class MaxHoldBandExtractor:
+    """Her order icin RPM araligindan bant hesaplar, bant-maks cikarir."""
+
+    def extract(
+        self,
+        run: EngineRun,
+        rpm_min: float,
+        rpm_max: float,
+        orders: Optional[List[float]] = None,
+    ) -> Dict[float, Tuple[float, float, float, float]]:
+        """order -> (band_max_amp, band_max_freq_hz, band_lo_hz, band_hi_hz).
+
+        Bant icinde frekans bini yoksa o order atlanir.
+        """
+        if orders is None:
+            orders = list(ORDER_DEFINITIONS.keys())
+
+        freqs = np.asarray(run.frequencies, dtype=np.float64)
+        # FFT_MAX_HOLD amplitudes sekli (1, F); tek satir.
+        amps = np.asarray(run.amplitudes, dtype=np.float64)
+        spectrum = amps[0] if amps.ndim == 2 else amps
+
+        f_lo_shaft = float(rpm_min) / 60.0
+        f_hi_shaft = float(rpm_max) / 60.0
+
+        result: Dict[float, Tuple[float, float, float, float]] = {}
+        for order in orders:
+            band_lo = order * f_lo_shaft
+            band_hi = order * f_hi_shaft
+            mask = (freqs >= band_lo) & (freqs <= band_hi)
+            if not mask.any():
+                continue
+            band_amps = spectrum[mask]
+            band_freqs = freqs[mask]
+            j = int(np.argmax(band_amps))
+            result[order] = (
+                float(band_amps[j]),
+                float(band_freqs[j]),
+                float(band_lo),
+                float(band_hi),
+            )
+        return result
+
+
+class MaxHoldAnalyzer:
+    """Iki FFT Max Hold kanali (olculen vs referans) arasinda bant-maks
+    karsilastirmasi yapar; mevcut tani/skor altyapisini yeniden kullanir."""
+
+    def __init__(
+        self,
+        extractor: Optional[MaxHoldBandExtractor] = None,
+        diagnostic_engine: Optional[FaultDiagnosticEngine] = None,
+        scorer: Optional[HealthScorer] = None,
+    ) -> None:
+        self._extractor = extractor or MaxHoldBandExtractor()
+        self._diag = diagnostic_engine or FaultDiagnosticEngine()
+        self._scorer = scorer or HealthScorer()
+
+    def _threshold_for_order(self, order: float) -> float:
+        base = ALERT_THRESHOLDS[Severity.WARNING]
+        if order in SENSITIVE_ORDERS:
+            return base * SENSITIVE_THRESHOLD_MULTIPLIER
+        return base
+
+    def _classify(self, ratio: float, order: float) -> Severity:
+        if ratio >= ALERT_THRESHOLDS[Severity.CRITICAL]:
+            return Severity.CRITICAL
+        if ratio >= self._threshold_for_order(order):
+            return Severity.WARNING
+        return Severity.INFO
+
+    def analyze(
+        self,
+        run: EngineRun,
+        reference: EngineRun,
+        rpm_min: float,
+        rpm_max: float,
+        orders_to_analyze: Optional[List[float]] = None,
+    ) -> Tuple[DiagnosticReport, Dict[float, MaxHoldBand]]:
+        if orders_to_analyze is None:
+            orders_to_analyze = list(ORDER_DEFINITIONS.keys())
+        for o in MANDATORY_MONITOR_ORDERS:
+            if o not in orders_to_analyze:
+                orders_to_analyze.append(o)
+
+        meas_bands = self._extractor.extract(run, rpm_min, rpm_max, orders_to_analyze)
+        ref_bands  = self._extractor.extract(reference, rpm_min, rpm_max, orders_to_analyze)
+
+        bands: Dict[float, MaxHoldBand] = {}
+        anomalies: List[AnomalyFlag] = []
+
+        for order, (m_amp, m_freq, b_lo, b_hi) in meas_bands.items():
+            implied_rpm = 60.0 * m_freq / order if order > 0 else 0.0
+            r_tuple = ref_bands.get(order)
+            r_amp = r_tuple[0] if r_tuple else None
+
+            ratio = None
+            if r_amp is not None and r_amp > 1e-12:
+                ratio = m_amp / r_amp
+
+            bands[order] = MaxHoldBand(
+                order=order,
+                band_lo_hz=b_lo, band_hi_hz=b_hi,
+                measured_amp=m_amp, reference_amp=r_amp,
+                measured_freq_hz=m_freq, implied_rpm=implied_rpm,
+                ratio=ratio,
+            )
+
+            if ratio is None:
+                continue
+            severity = self._classify(ratio, order)
+            if severity is Severity.INFO:
+                continue
+
+            odef = ORDER_DEFINITIONS.get(order)
+            faults = odef.fault_indicators if odef else []
+            desc = (
+                f"Order {order:g}× bant-maks {ratio:.2f}× referans "
+                f"({b_lo:.0f}–{b_hi:.0f} Hz bandi; tepe {m_freq:.1f} Hz, "
+                f"~{implied_rpm:.0f} RPM'de bu order'a denk gelir). "
+                "Max-hold bant tabanli — komsu order bantlari cakisabilir. "
+                + (odef.description if odef else "")
+            )
+            anomalies.append(AnomalyFlag(
+                order=order,
+                frequency_hz=m_freq,
+                rpm=implied_rpm,
+                measured_amplitude=m_amp,
+                reference_amplitude=r_amp if r_amp is not None else 0.0,
+                amplitude_ratio=ratio,
+                fault_signatures=faults,
+                severity=severity.value,
+                sensor_location=run.sensor_location,
+                engine_id=run.engine_id,
+                run_id=run.run_id,
+                description=desc,
+            ))
+
+        diagnoses = self._diag.diagnose(anomalies)
+        health = self._scorer.score(anomalies)
+        recommendations = list(dict.fromkeys(
+            d["recommendation"] for d in diagnoses
+        ))
+        crit = [d["fault_name"] for d in diagnoses if d["severity"] == Severity.CRITICAL.value]
+        warn = [d["fault_name"] for d in diagnoses if d["severity"] == Severity.WARNING.value]
+
+        parts = [
+            f"FFT Max Hold bant-maks analizi (RPM {rpm_min:.0f}–{rpm_max:.0f}). "
+        ]
+        if not anomalies:
+            parts.append("Referans limitleri icinde, belirgin anomali yok.")
+        else:
+            if crit:
+                parts.append(f"KRITIK: {', '.join(crit)}.")
+            if warn:
+                parts.append(f"Uyari: {', '.join(warn)}.")
+            parts.append(f"Saglik skoru: {health}/100.")
+        parts.append(
+            "Not: RPM araligi genis oldugunda komsu order bantlari cakisir; "
+            "yuksek order bulgulari ayri ayri degil aile/bolge olarak yorumlanmalidir."
+        )
+
+        report = DiagnosticReport(
+            engine_id=run.engine_id,
+            run_id=run.run_id,
+            sensor_location=run.sensor_location,
+            anomalies=anomalies,
+            fault_diagnoses=diagnoses,
+            overall_health_score=health,
+            reference_engine_id=reference.engine_id,
+            summary=" ".join(parts),
+            recommendations=recommendations,
+        )
+        return report, bands

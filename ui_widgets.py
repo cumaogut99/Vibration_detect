@@ -834,3 +834,158 @@ class ChannelEditDialog(QObject):
             "sensor_location": new_loc,
             "axis": new_ax,
         }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PYQTGRAPH TABANLI MAX HOLD GORSELLERI
+#
+#  Max Hold sayfasi pyqtgraph kullanir: fare ile zoom/pan, sag-tik menusu
+#  (auto-range, eksen kilidi, PNG/CSV export) yerlesik gelir; ayri eksen
+#  araligi input alanlarina gerek kalmaz.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PG_BG    = "#0d1117"
+_PG_FG    = "#8b949e"
+_PG_MEAS  = "#f0883e"
+_PG_REF   = "#58a6ff"
+_PG_GREEN = "#3fb950"
+_PG_YEL   = "#d29922"
+_PG_RED   = "#f85149"
+
+
+def _spectrum_row(run: "EngineRun"):
+    import numpy as np
+    a = np.asarray(run.amplitudes, dtype=float)
+    return a[0] if a.ndim == 2 else a
+
+
+class MaxHoldSpectrumView(QWidget):
+    """Olculen (+ varsa referans) max-hold spektrumu — pyqtgraph.
+
+    Fare tekerlegi: zoom · sol-tik surukle: pan · sag-tik: menu
+    (View All / X-Y kilidi / Export). Y ekseni log.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        import pyqtgraph as pg
+
+        pg.setConfigOptions(antialias=True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._plot = pg.PlotWidget(background=_PG_BG)
+        self._plot.setLogMode(x=False, y=True)
+        self._plot.showGrid(x=True, y=True, alpha=0.25)
+        self._plot.setLabel("bottom", "Frekans", units="Hz",
+                            color=_PG_FG)
+        self._plot.setLabel("left", "Genlik (g, log)", color=_PG_FG)
+        self._plot.getAxis("bottom").setPen(_PG_FG)
+        self._plot.getAxis("left").setPen(_PG_FG)
+        self._plot.getAxis("bottom").setTextPen(_PG_FG)
+        self._plot.getAxis("left").setTextPen(_PG_FG)
+        self._legend = self._plot.addLegend(offset=(-10, 10),
+                                            labelTextColor=_PG_FG)
+        layout.addWidget(self._plot)
+
+        self._placeholder()
+
+    def _placeholder(self):
+        import pyqtgraph as pg
+        self._plot.clear()
+        ti = pg.TextItem("Kanal secip Goruntule / Karsilastir calistirin.",
+                         color=_PG_FG, anchor=(0.5, 0.5))
+        ti.setPos(0.5, 0.5)
+        self._plot.addItem(ti)
+
+    def set_data(self, meas_run, ref_run=None) -> None:
+        import numpy as np
+        self._plot.clear()
+        if self._legend is not None:
+            self._legend.clear()
+
+        mf = np.asarray(meas_run.frequencies, dtype=float)
+        ma = np.clip(_spectrum_row(meas_run), 1e-9, None)
+        self._plot.plot(
+            mf, ma, pen={"color": _PG_MEAS, "width": 1},
+            name=f"Olculen: {meas_run.engine_id} · {meas_run.sensor_location}",
+        )
+        if ref_run is not None:
+            rf = np.asarray(ref_run.frequencies, dtype=float)
+            ra = np.clip(_spectrum_row(ref_run), 1e-9, None)
+            self._plot.plot(
+                rf, ra, pen={"color": _PG_REF, "width": 1},
+                name=f"Referans: {ref_run.engine_id} · {ref_run.sensor_location}",
+            )
+        self._plot.enableAutoRange()
+        self._plot.autoRange()
+
+
+class MaxHoldRatioView(QWidget):
+    """Order bant-maks oran cubuk grafigi — pyqtgraph.
+
+    ``set_bands`` ``analysis.MaxHoldAnalyzer.analyze`` ikinci donus
+    degerini (order -> MaxHoldBand) alir.
+    """
+
+    WARN, CRIT = 1.5, 2.5
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        import pyqtgraph as pg
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._plot = pg.PlotWidget(background=_PG_BG)
+        self._plot.showGrid(x=False, y=True, alpha=0.25)
+        self._plot.setLabel("left", "Bant-maks oran (olculen / referans)",
+                            color=_PG_FG)
+        self._plot.setLabel("bottom", "Order", color=_PG_FG)
+        self._plot.getAxis("bottom").setPen(_PG_FG)
+        self._plot.getAxis("left").setPen(_PG_FG)
+        self._plot.getAxis("bottom").setTextPen(_PG_FG)
+        self._plot.getAxis("left").setTextPen(_PG_FG)
+        layout.addWidget(self._plot)
+
+    def set_bands(self, bands: dict) -> None:
+        import numpy as np
+        import pyqtgraph as pg
+
+        self._plot.clear()
+        items = sorted(
+            ((o, b) for o, b in bands.items()
+             if getattr(b, "ratio", None) is not None),
+            key=lambda kv: kv[0],
+        )
+        if not items:
+            ti = pg.TextItem("Ortak order bandi yok.", color=_PG_FG,
+                             anchor=(0.5, 0.5))
+            self._plot.addItem(ti)
+            return
+
+        orders = [o for o, _ in items]
+        ratios = [float(b.ratio) for _, b in items]
+        x = np.arange(len(orders))
+
+        for xi, r in zip(x, ratios):
+            c = (_PG_RED if r >= self.CRIT
+                 else _PG_YEL if r >= self.WARN
+                 else _PG_GREEN)
+            bg = pg.BarGraphItem(x=[xi], height=[r], width=0.7, brush=c, pen=c)
+            self._plot.addItem(bg)
+
+        for y, col, dash in (
+            (1.0, _PG_FG, [2, 4]),
+            (self.WARN, _PG_YEL, [6, 4]),
+            (self.CRIT, _PG_RED, [6, 4]),
+        ):
+            line = pg.InfiniteLine(
+                pos=y, angle=0,
+                pen=pg.mkPen(color=col, width=1, dash=dash),
+            )
+            self._plot.addItem(line)
+
+        ax = self._plot.getAxis("bottom")
+        ax.setTicks([[(int(xi), f"{o:g}×") for xi, o in zip(x, orders)]])
+        self._plot.enableAutoRange()
+        self._plot.autoRange()

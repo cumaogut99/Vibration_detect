@@ -183,3 +183,44 @@ class SingleChannelWorker(QThread):
         except Exception as exc:
             logger.error("SingleChannelWorker hatasi: %s", exc)
             self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")
+
+
+# ---------------------------------------------------------------------------
+#  FFT MAX HOLD — BAND-MAKS KARSILASTIRMA
+# ---------------------------------------------------------------------------
+
+class MaxHoldCompareWorker(QThread):
+    """Iki FFT Max Hold kanali arasinda bant-maks analizi calistirir.
+
+    Sinyaller:
+      progress(str)
+      finished(report, bands, meas_run, ref_run)
+      error(str)
+    """
+
+    progress = Signal(str)
+    finished = Signal(object, object, object, object)
+    error    = Signal(str)
+
+    def __init__(self, meas_run: EngineRun, ref_run: EngineRun,
+                 rpm_min: float, rpm_max: float, parent=None):
+        super().__init__(parent)
+        self._meas = meas_run
+        self._ref  = ref_run
+        self._rpm_min = rpm_min
+        self._rpm_max = rpm_max
+
+    def run(self):
+        try:
+            from analysis import MaxHoldAnalyzer
+            self.progress.emit("Bant-maks analizi calistiriliyor...")
+            analyzer = MaxHoldAnalyzer()
+            report, bands = analyzer.analyze(
+                self._meas, self._ref,
+                rpm_min=self._rpm_min, rpm_max=self._rpm_max,
+            )
+            self.progress.emit("Tamamlandi.")
+            self.finished.emit(report, bands, self._meas, self._ref)
+        except Exception as exc:
+            logger.error("MaxHoldCompareWorker hatasi: %s", exc)
+            self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")

@@ -31,6 +31,7 @@ from ui_pages import (
     PageDataManagement,
     PageEngineConfig,
     PageAnalysis,
+    PageMaxHold,
     PageLog,
 )
 from ui_styles import STYLESHEET, PALETTE_COLORS
@@ -120,16 +121,19 @@ class MainWindow(QMainWindow):
         self._page_data    = PageDataManagement(self._store, self)
         self._page_config  = PageEngineConfig(self)
         self._page_analyze = PageAnalysis(self._store, self)
+        self._page_maxhold = PageMaxHold(self._store, self)
         self._page_log     = PageLog(self)
 
         self._stack.addWidget(self._page_data)    # index 0
         self._stack.addWidget(self._page_config)  # index 1
         self._stack.addWidget(self._page_analyze) # index 2
-        self._stack.addWidget(self._page_log)     # index 3
+        self._stack.addWidget(self._page_maxhold) # index 3
+        self._stack.addWidget(self._page_log)     # index 4
 
         # Sayfalardan gelen log mesajlarini Log sayfasina yonlendir
         self._page_data.log_message.connect(self._on_log)
         self._page_analyze.log_message.connect(self._on_log)
+        self._page_maxhold.log_message.connect(self._on_log)
 
         # Durum cubugu
         self._status = QStatusBar()
@@ -181,7 +185,8 @@ class MainWindow(QMainWindow):
             ("📂  Veri Yonetimi",       0),
             ("⚙️  Motor Konfigurasyonu", 1),
             ("📈  Analiz",                2),
-            ("📋  Log",                   3),
+            ("📊  Max Hold",             3),
+            ("📋  Log",                   4),
         ]
         for label, idx in items:
             btn = TopTabButton(label, idx)
