@@ -898,11 +898,27 @@ class MaxHoldSpectrumView(QWidget):
         ti.setPos(0.5, 0.5)
         self._plot.addItem(ti)
 
-    def set_data(self, meas_run, ref_run=None) -> None:
+    def set_data(self, meas_run, ref_run=None, regions=None) -> None:
+        """``regions``: opsiyonel [(lo_hz, hi_hz, severity_str), ...] —
+        asim olan order bantlari yari saydam renkli kapatilir
+        (Critical = kirmizi, Warning = sari)."""
         import numpy as np
+        import pyqtgraph as pg
         self._plot.clear()
         if self._legend is not None:
             self._legend.clear()
+
+        for lo, hi, sev in (regions or []):
+            crit = str(sev).lower().startswith("crit")
+            col = _PG_RED if crit else _PG_YEL
+            brush = pg.mkBrush(QColor(col).red(), QColor(col).green(),
+                               QColor(col).blue(), 55)
+            reg = pg.LinearRegionItem(
+                values=[lo, hi], orientation="vertical", movable=False,
+                brush=brush, pen=pg.mkPen(col, width=1, dash=[4, 4]),
+            )
+            reg.setZValue(-10)
+            self._plot.addItem(reg)
 
         mf = np.asarray(meas_run.frequencies, dtype=float)
         ma = np.clip(_spectrum_row(meas_run), 1e-9, None)

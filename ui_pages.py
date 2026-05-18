@@ -1379,8 +1379,13 @@ class PageMaxHold(QWidget):
         self._overlay.hide_loading()
         self._compare_btn.setEnabled(True)
 
+        regions = []
+        for a in report.anomalies:
+            b = bands.get(a.order)
+            if b is not None:
+                regions.append((b.band_lo_hz, b.band_hi_hz, a.severity))
         try:
-            self._spec_view.set_data(meas_run, ref_run)
+            self._spec_view.set_data(meas_run, ref_run, regions=regions)
         except Exception as exc:
             logger.warning("Spektrum hatasi: %s", exc)
         try:
