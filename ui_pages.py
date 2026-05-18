@@ -1120,12 +1120,12 @@ class PageMaxHold(QWidget):
         self._cur_ref = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 12, 20, 12)
+        outer.setContentsMargins(12, 10, 12, 10)
         outer.setSpacing(10)
 
-        # ── Ust kontrol satiri ────────────────────────────────────────────
+        # ── Ust kontrol satiri (tek satirda kalsin) ───────────────────────
         top = QHBoxLayout()
-        top.setSpacing(10)
+        top.setSpacing(6)
         outer.addLayout(top)
 
         self._rb_single  = QRadioButton("Tek Kanal")
@@ -1145,14 +1145,24 @@ class PageMaxHold(QWidget):
         self._rpm_min = QLineEdit()
         self._rpm_min.setPlaceholderText("min")
         self._rpm_min.setText(f"{self.DEFAULT_RPM_MIN:.0f}")
-        self._rpm_min.setFixedWidth(72)
+        self._rpm_min.setFixedWidth(58)
         self._rpm_max = QLineEdit()
         self._rpm_max.setPlaceholderText("max")
         self._rpm_max.setText(f"{self.DEFAULT_RPM_MAX:.0f}")
-        self._rpm_max.setFixedWidth(72)
+        self._rpm_max.setFixedWidth(58)
         top.addWidget(self._rpm_min)
         top.addWidget(self._mklabel("–"))
         top.addWidget(self._rpm_max)
+
+        top.addWidget(self._vsep())
+
+        # Yon filtresi (tek kanal + karsilastirma icin ortak)
+        top.addWidget(self._mklabel("Yon:"))
+        self._axis_filter = QComboBox()
+        self._axis_filter.setFixedWidth(74)
+        self._axis_filter.currentTextChanged.connect(
+            lambda _t: self._apply_axis_filter())
+        top.addWidget(self._axis_filter)
 
         top.addWidget(self._vsep())
 
@@ -1164,17 +1174,17 @@ class PageMaxHold(QWidget):
         sw = QWidget()
         swl = QHBoxLayout(sw)
         swl.setContentsMargins(0, 0, 0, 0)
-        swl.setSpacing(8)
+        swl.setSpacing(6)
         swl.addWidget(self._mklabel("Motor:"))
         self._s_motor = QComboBox()
-        self._s_motor.setMinimumWidth(110)
+        self._s_motor.setMinimumWidth(90)
         self._s_motor.currentTextChanged.connect(
             lambda _t: self._refresh_channel_combo(self._s_motor, self._s_chan))
         swl.addWidget(self._s_motor)
         swl.addWidget(self._mklabel("Kanal:"))
         self._s_chan = QComboBox()
-        self._s_chan.setMinimumWidth(220)
-        swl.addWidget(self._s_chan)
+        self._s_chan.setMinimumWidth(180)
+        swl.addWidget(self._s_chan, stretch=1)
         swl.addStretch()
         self._selector_stack.addWidget(sw)
 
@@ -1182,28 +1192,26 @@ class PageMaxHold(QWidget):
         cw = QWidget()
         cwl = QHBoxLayout(cw)
         cwl.setContentsMargins(0, 0, 0, 0)
-        cwl.setSpacing(8)
-        cwl.addWidget(self._mklabel("Ref Motor:"))
+        cwl.setSpacing(6)
+        cwl.addWidget(self._mklabel("Ref:"))
         self._r_motor = QComboBox()
-        self._r_motor.setMinimumWidth(100)
+        self._r_motor.setMinimumWidth(80)
         self._r_motor.currentTextChanged.connect(
             lambda _t: self._refresh_channel_combo(self._r_motor, self._r_chan))
         cwl.addWidget(self._r_motor)
-        cwl.addWidget(self._mklabel("Ref Kanal:"))
         self._r_chan = QComboBox()
-        self._r_chan.setMinimumWidth(180)
-        cwl.addWidget(self._r_chan)
+        self._r_chan.setMinimumWidth(140)
+        cwl.addWidget(self._r_chan, stretch=1)
         cwl.addWidget(self._vsep())
-        cwl.addWidget(self._mklabel("Ana Motor:"))
+        cwl.addWidget(self._mklabel("Ana:"))
         self._m_motor = QComboBox()
-        self._m_motor.setMinimumWidth(100)
+        self._m_motor.setMinimumWidth(80)
         self._m_motor.currentTextChanged.connect(
             lambda _t: self._refresh_channel_combo(self._m_motor, self._m_chan))
         cwl.addWidget(self._m_motor)
-        cwl.addWidget(self._mklabel("Ana Kanal:"))
         self._m_chan = QComboBox()
-        self._m_chan.setMinimumWidth(180)
-        cwl.addWidget(self._m_chan)
+        self._m_chan.setMinimumWidth(140)
+        cwl.addWidget(self._m_chan, stretch=1)
         cwl.addStretch()
         self._selector_stack.addWidget(cw)
 
@@ -1304,6 +1312,18 @@ class PageMaxHold(QWidget):
             r.engine_id for _, r in self._store.items()
             if r.data_type == DataType.FFT_MAX_HOLD
         })
+        axes = sorted({
+            (r.axis or "").upper() for _, r in self._store.items()
+            if r.data_type == DataType.FFT_MAX_HOLD and r.axis
+        })
+        cur_ax = self._axis_filter.currentText()
+        self._axis_filter.blockSignals(True)
+        self._axis_filter.clear()
+        self._axis_filter.addItems(["Tumu"] + axes)
+        if cur_ax and self._axis_filter.findText(cur_ax) >= 0:
+            self._axis_filter.setCurrentText(cur_ax)
+        self._axis_filter.blockSignals(False)
+
         for combo in (self._s_motor, self._r_motor, self._m_motor):
             cur = combo.currentText()
             combo.blockSignals(True)
@@ -1316,12 +1336,19 @@ class PageMaxHold(QWidget):
         self._refresh_channel_combo(self._r_motor, self._r_chan)
         self._refresh_channel_combo(self._m_motor, self._m_chan)
 
+    def _apply_axis_filter(self):
+        self._refresh_channel_combo(self._s_motor, self._s_chan)
+        self._refresh_channel_combo(self._r_motor, self._r_chan)
+        self._refresh_channel_combo(self._m_motor, self._m_chan)
+
     def _refresh_channel_combo(self, motor_combo: QComboBox,
                                channel_combo: QComboBox):
         motor = motor_combo.currentText()
+        axis = self._axis_filter.currentText()
         keys = [
             k for k, r in self._store.items()
             if r.engine_id == motor and r.data_type == DataType.FFT_MAX_HOLD
+            and (axis in ("", "Tumu") or (r.axis or "").upper() == axis)
         ]
         cur = channel_combo.currentText()
         channel_combo.blockSignals(True)
