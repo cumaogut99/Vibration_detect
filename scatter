@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MachinePulseAI — Scatter Plot (Design Mockup)</title>
+<style>
+  :root {
+    --bg:        #1b1e24;
+    --panel:     #23272f;
+    --panel-2:   #2b303a;
+    --rail:      #1d2128;
+    --border:    #353b46;
+    --text:      #d7dce3;
+    --text-dim:  #8b93a1;
+    --accent:    #4ea1ff;
+    --accent-2:  #ffb454;
+    --good:      #4ec97a;
+    --bad:       #ff6b6b;
+    --grid:      #2e333d;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", Roboto, system-ui, sans-serif; font-size: 13px;
+    overflow: hidden;
+  }
+  .app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ---- Toolbar ---- */
+  .toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 12px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .toolbar .title { font-weight: 600; font-size: 14px; letter-spacing: .2px; }
+  .toolbar .title .badge {
+    font-size: 10px; color: var(--text-dim); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; margin-left: 8px; font-weight: 400;
+  }
+  .toolbar .spacer { flex: 1; }
+  .tbtn {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 12px;
+  }
+  .tbtn:hover { border-color: var(--accent); }
+  .tbtn.active { background: var(--accent); color: #0c0f14; border-color: var(--accent); }
+
+  /* ---- Body ---- */
+  .body { display: flex; flex: 1; min-height: 0; }
+
+  /* ---- Left rail (icon buttons, like Time Graphics) ---- */
+  .rail {
+    width: 56px; background: var(--rail); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center; padding-top: 6px; gap: 2px;
+  }
+  .rail button {
+    width: 48px; height: 50px; background: transparent; border: none; color: var(--text-dim);
+    cursor: pointer; border-radius: 7px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px; font-size: 9.5px;
+  }
+  .rail button .ico { font-size: 18px; line-height: 1; }
+  .rail button:hover { background: var(--panel-2); color: var(--text); }
+  .rail button.active { background: var(--panel); color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+
+  /* ---- Left drawer (panel that opens) ---- */
+  .drawer {
+    width: 256px; background: var(--panel); border-right: 1px solid var(--border);
+    overflow-y: auto; transition: width .12s ease; flex-shrink: 0;
+  }
+  .drawer.collapsed { width: 0; border-right: none; overflow: hidden; }
+  .drawer-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 10px 12px; border-bottom: 1px solid var(--border);
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing:.5px; color: var(--text-dim);
+  }
+  .drawer-head .x { cursor:pointer; color:var(--text-dim); font-size:15px; }
+  .drawer-head .x:hover { color:var(--text); }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .section { padding: 10px 12px; border-bottom: 1px solid var(--grid); }
+  .row { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; gap: 8px; }
+  .row label { color: var(--text-dim); font-size: 12px; }
+  select, input[type="number"] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 4px 6px; font-size: 12px; max-width: 132px;
+  }
+  input[type="range"] { width: 118px; accent-color: var(--accent); }
+  input[type="checkbox"] { accent-color: var(--accent); }
+  .val { color: var(--text); font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
+  .hintnote { color: var(--text-dim); font-size: 11px; line-height:1.4; }
+
+  /* ---- Channels list (now on the LEFT) ---- */
+  .chan {
+    display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+    border-bottom: 1px solid var(--grid);
+  }
+  .chan .swatch { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; background:#3a4150; }
+  .chan .name { flex: 1; }
+  .assign { display:flex; gap:4px; }
+  .assign button {
+    width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text-dim); cursor: pointer; font-size: 11px; font-weight:600;
+  }
+  .assign button.x { color: var(--accent); border-color: var(--accent); background: rgba(78,161,255,.12); }
+  .assign button.y { color: var(--accent-2); border-color: var(--accent-2); background: rgba(255,180,84,.12); }
+  .series-row {
+    display:flex; align-items:center; gap:8px; padding:7px 12px; border-bottom:1px solid var(--grid);
+  }
+  .series-row .swatch { width:12px;height:12px;border-radius:3px;flex-shrink:0; }
+  .series-row .name { flex:1; }
+  .series-row .count { color:var(--text-dim); font-size:11px; }
+  .grp-title { padding: 9px 12px 4px; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-dim); font-weight:600; }
+
+  /* ---- Center plot ---- */
+  .pane-center { flex: 1; min-width: 0; position: relative; display:flex; flex-direction:column; }
+  .plot-wrap { flex: 1; position: relative; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display:block; }
+  #overlay { cursor: crosshair; }
+  .readout {
+    position: absolute; left: 12px; bottom: 10px;
+    background: rgba(20,23,28,.85); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; font-size: 12px; color: var(--text-dim);
+    font-variant-numeric: tabular-nums; pointer-events: none;
+  }
+  .readout b { color: var(--text); }
+  .tooltip {
+    position: absolute; pointer-events: none; display: none; z-index: 20;
+    background: rgba(20,23,28,.95); border: 1px solid var(--accent); border-radius: 6px;
+    padding: 7px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .tooltip .k { color: var(--text-dim); }
+  .legend {
+    position: absolute; right: 12px; top: 10px;
+    background: rgba(20,23,28,.7); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px; font-size: 12px; pointer-events: none;
+  }
+  .legend .lrow { display:flex; align-items:center; gap:7px; margin: 2px 0; }
+  .legend .swatch { width:12px;height:12px;border-radius:3px; }
+  .hint {
+    position:absolute; left:50%; transform:translateX(-50%); top:10px;
+    background: rgba(78,161,255,.12); border:1px solid var(--accent); color:var(--accent);
+    border-radius: 14px; padding: 4px 12px; font-size: 11.5px; pointer-events:none;
+  }
+
+  /* ---- Right tabs ---- */
+  .pane-right { width: 296px; background: var(--panel); border-left: 1px solid var(--border); display:flex; flex-direction:column; }
+  .tabs { display: flex; border-bottom: 1px solid var(--border); }
+  .tab { flex: 1; text-align: center; padding: 8px 4px; cursor: pointer; font-size: 12px; color: var(--text-dim); border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-body { flex: 1; overflow-y: auto; padding: 4px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: right; padding: 5px 12px; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; color: var(--text-dim); }
+  td { font-variant-numeric: tabular-nums; }
+  .stat-group-title { padding: 9px 12px 4px; font-size: 11px; text-transform: uppercase; letter-spacing:.5px; color: var(--text-dim); font-weight: 600; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 10px; }
+  .pill.good { background: rgba(78,201,122,.15); color: var(--good); }
+  .pill.warn { background: rgba(255,180,84,.15); color: var(--accent-2); }
+  .pill.bad  { background: rgba(255,107,107,.15); color: var(--bad); }
+  .insight { display: flex; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--grid); line-height: 1.45; }
+  .insight .ico { font-size: 15px; flex-shrink: 0; }
+  .insight .txt b { color: #fff; }
+  .insight.warn { background: rgba(255,180,84,.05); }
+  .insight.bad  { background: rgba(255,107,107,.06); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ================= TOOLBAR ================= -->
+  <div class="toolbar">
+    <span class="title">Scatter Plot <span class="badge">Bivariate Explorer · Design Mockup</span></span>
+    <span class="spacer"></span>
+    <button class="tbtn" id="btnSelMode" title="Lasso select for cross-filtering">⬚ Lasso Select</button>
+    <button class="tbtn" id="btnClearSel">Clear Selection</button>
+    <button class="tbtn" id="btnReset">Reset View</button>
+    <button class="tbtn" title="Mock only">⤓ Export</button>
+  </div>
+
+  <div class="body">
+
+    <!-- ================= LEFT RAIL (toggle buttons) ================= -->
+    <div class="rail" id="rail">
+      <button data-panel="channels" class="active"><span class="ico">📑</span>Channels</button>
+      <button data-panel="axes"><span class="ico">📐</span>Axes</button>
+      <button data-panel="encoding"><span class="ico">🎨</span>Encode</button>
+      <button data-panel="markers"><span class="ico">⬤</span>Markers</button>
+      <button data-panel="density"><span class="ico">🌫️</span>Density</button>
+      <button data-panel="trend"><span class="ico">📈</span>Trend</button>
+      <button data-panel="reference"><span class="ico">📏</span>Limits</button>
+    </div>
+
+    <!-- ================= LEFT DRAWER (panel content) ================= -->
+    <div class="drawer" id="drawer">
+      <div class="drawer-head"><span id="drawerTitle">Channels</span><span class="x" id="drawerX">✕</span></div>
+
+      <!-- CHANNELS panel -->
+      <div class="panel active" data-panel="channels">
+        <div class="grp-title">Channels — click X / Y to assign</div>
+        <div id="chanList"></div>
+        <div class="grp-title">Series</div>
+        <div id="seriesList"></div>
+      </div>
+
+      <!-- AXES panel -->
+      <div class="panel" data-panel="axes">
+        <div class="section">
+          <div class="row"><label>X Channel</label><select id="xCol"></select></div>
+          <div class="row"><label>Y Channel</label><select id="yCol"></select></div>
+          <div class="row"><label>X Log scale</label><input type="checkbox" id="xLog"></div>
+          <div class="row"><label>Y Log scale</label><input type="checkbox" id="yLog"></div>
+        </div>
+      </div>
+
+      <!-- ENCODING panel -->
+      <div class="panel" data-panel="encoding">
+        <div class="section">
+          <div class="row"><label>Group by</label>
+            <select id="groupBy">
+              <option value="bearing" selected>Bearing (category)</option>
+              <option value="none">None (single series)</option>
+            </select></div>
+          <div class="row"><label>Color by</label>
+            <select id="colorBy">
+              <option value="series" selected>Series</option>
+              <option value="Temperature">Temperature (continuous)</option>
+              <option value="none">None</option>
+            </select></div>
+          <div class="row"><label>Size by</label>
+            <select id="sizeBy">
+              <option value="none" selected>None</option>
+              <option value="Order-2 Amp">Order-2 Amp</option>
+            </select></div>
+          <div class="hintnote">Color/size-by extra channels turns the scatter into a 4-dimensional explorer (bubble chart).</div>
+        </div>
+      </div>
+
+      <!-- MARKERS panel -->
+      <div class="panel" data-panel="markers">
+        <div class="section">
+          <div class="row"><label>Shape</label>
+            <select id="shape">
+              <option value="circle" selected>Circle</option>
+              <option value="square">Square</option>
+              <option value="diamond">Diamond</option>
+              <option value="triangle">Triangle</option>
+              <option value="cross">Cross</option>
+            </select></div>
+          <div class="row"><label>Size</label>
+            <input type="range" id="ptSize" min="2" max="14" value="5"><span class="val" id="ptSizeV">5</span></div>
+          <div class="row"><label>Opacity</label>
+            <input type="range" id="opacity" min="10" max="100" value="80"><span class="val" id="opacityV">80%</span></div>
+        </div>
+      </div>
+
+      <!-- DENSITY panel -->
+      <div class="panel" data-panel="density">
+        <div class="section">
+          <div class="row"><label>Mode</label>
+            <select id="densMode">
+              <option value="points" selected>Points only</option>
+              <option value="hexbin">Hexbin density</option>
+              <option value="contour">KDE contours</option>
+            </select></div>
+          <div class="row"><label>95% Density ellipse</label><input type="checkbox" id="ellipse"></div>
+          <div class="hintnote">Density layer solves over-plotting on 50k+ points (JMP Graph Builder / Spotfire / Datashader).</div>
+        </div>
+      </div>
+
+      <!-- TREND panel -->
+      <div class="panel" data-panel="trend">
+        <div class="section">
+          <div class="row"><label>Model</label>
+            <select id="regModel">
+              <option value="none">None</option>
+              <option value="ols" selected>Linear (OLS)</option>
+              <option value="robust">Robust (Theil–Sen)</option>
+              <option value="poly2">Polynomial (deg 2)</option>
+              <option value="poly3">Polynomial (deg 3)</option>
+              <option value="loess">LOESS (local)</option>
+            </select></div>
+          <div class="row"><label>Confidence band (95%)</label><input type="checkbox" id="ciBand" checked></div>
+          <div class="row"><label>Per-series fit</label><input type="checkbox" id="perSeries" checked></div>
+          <div class="row"><label>Mark residual outliers</label><input type="checkbox" id="markOutliers" checked></div>
+          <div class="hintnote">Theil–Sen is robust to outliers (measurement spikes); LOESS captures non-linear trends.</div>
+        </div>
+      </div>
+
+      <!-- REFERENCE panel -->
+      <div class="panel" data-panel="reference">
+        <div class="section">
+          <div class="row"><label>Y spec limit (USL)</label>
+            <input type="number" id="usl" value="0" step="0.1" style="max-width:80px"></div>
+          <div class="hintnote">Set &gt; 0 to draw a limit line &amp; flag exceedances (semiconductor / SPC pattern).</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= CENTER PLOT ================= -->
+    <div class="pane-center">
+      <div class="plot-wrap" id="plotWrap">
+        <canvas id="plot"></canvas>
+        <canvas id="overlay"></canvas>
+        <div class="legend" id="legend"></div>
+        <div class="readout" id="readout">X: — &nbsp; Y: —</div>
+        <div class="tooltip" id="tooltip"></div>
+        <div class="hint" id="hint" style="display:none">Drag to lasso-select points → cross-filters all linked views</div>
+      </div>
+    </div>
+
+    <!-- ================= RIGHT TABS ================= -->
+    <div class="pane-right">
+      <div class="tabs">
+        <div class="tab active" data-tab="stats">Statistics</div>
+        <div class="tab" data-tab="insights">Insights</div>
+      </div>
+      <div class="tab-body" id="tab-stats"></div>
+      <div class="tab-body" id="tab-insights" style="display:none"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   MachinePulseAI — Scatter Plot UI design mockup
+   Pure client-side. Synthetic measurement-style data. No backend.
+   Layout: left icon rail toggles left drawer panels (Time-Graphics style);
+   channels live on the LEFT. Right pane = Statistics + auto Insights.
+   ===================================================================== */
+
+// ---------- 1. Synthetic dataset ----------
+const SERIES = [
+  { key:'A', name:'Bearing A', color:'#4ea1ff' },
+  { key:'B', name:'Bearing B', color:'#ffb454' },
+  { key:'C', name:'Bearing C', color:'#b07cff' },
+];
+const CHANNELS = ['RPM','Load','Vibration RMS','Temperature','Order-2 Amp'];
+
+function randn(){ let u=0,v=0; while(!u)u=Math.random(); while(!v)v=Math.random();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+
+const DATA = [];
+const seriesParams = {
+  A:{ n:220, base:0.8, slope:0.0011, noise:0.45, tempK:0.02 },
+  B:{ n:200, base:1.4, slope:0.0016, noise:0.6,  tempK:0.028 },
+  C:{ n:170, base:2.2, slope:0.0024, noise:0.9,  tempK:0.04 },
+};
+for (const s of SERIES){
+  const p=seriesParams[s.key];
+  for(let i=0;i<p.n;i++){
+    const rpm=600+Math.random()*5400, load=20+Math.random()*80;
+    let vib=p.base+p.slope*rpm+load*0.004+randn()*p.noise;
+    if(Math.random()<0.025) vib+=(2+Math.random()*5)*(Math.random()<.5?1:-1);
+    vib=Math.max(0.05,vib);
+    const temp=35+rpm*p.tempK*0.01+load*0.15+randn()*3;
+    const ord2=Math.abs(vib*0.4+randn()*0.2);
+    DATA.push({series:s.key,'RPM':rpm,'Load':load,'Vibration RMS':vib,'Temperature':temp,'Order-2 Amp':ord2});
+  }
+}
+
+// ---------- 2. State ----------
+const ST = {
+  xCol:'RPM', yCol:'Vibration RMS', groupBy:'bearing',
+  colorBy:'series', sizeBy:'none', shape:'circle',
+  ptSize:5, opacity:0.8, densMode:'points', ellipse:false,
+  regModel:'ols', ciBand:true, perSeries:true, markOutliers:true,
+  xLog:false, yLog:false, usl:0,
+  selMode:false, selection:null, view:null,
+  panel:'channels', drawerOpen:true,
+};
+
+// ---------- 3. Stats helpers ----------
+const mean=a=>a.reduce((s,v)=>s+v,0)/a.length;
+const std =a=>{const m=mean(a);return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/(a.length-1||1));};
+function pearson(x,y){const mx=mean(x),my=mean(y);let sxy=0,sx=0,sy=0;
+  for(let i=0;i<x.length;i++){const dx=x[i]-mx,dy=y[i]-my;sxy+=dx*dy;sx+=dx*dx;sy+=dy*dy;}
+  return sxy/Math.sqrt(sx*sy||1);}
+function rankOf(a){const idx=a.map((v,i)=>[v,i]).sort((p,q)=>p[0]-q[0]);const r=new Array(a.length);
+  for(let i=0;i<idx.length;i++)r[idx[i][1]]=i+1;return r;}
+const spearman=(x,y)=>pearson(rankOf(x),rankOf(y));
+function olsFit(x,y){const mx=mean(x),my=mean(y);let sxy=0,sxx=0;
+  for(let i=0;i<x.length;i++){sxy+=(x[i]-mx)*(y[i]-my);sxx+=(x[i]-mx)*(x[i]-mx);}
+  const slope=sxy/(sxx||1),intercept=my-slope*mx;return {slope,intercept,predict:xv=>slope*xv+intercept};}
+function theilSen(x,y){const slopes=[];const n=x.length;const step=Math.max(1,Math.floor(n*n/4000));let c=0;
+  for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){if((c++%step))continue;const dx=x[j]-x[i];
+    if(Math.abs(dx)<1e-9)continue;slopes.push((y[j]-y[i])/dx);}
+  slopes.sort((a,b)=>a-b);const slope=slopes[Math.floor(slopes.length/2)]||0;
+  const inter=[];for(let i=0;i<n;i++)inter.push(y[i]-slope*x[i]);inter.sort((a,b)=>a-b);
+  const intercept=inter[Math.floor(inter.length/2)]||0;return {slope,intercept,predict:xv=>slope*xv+intercept};}
+function polyFit(x,y,deg){const m=deg+1;const A=Array.from({length:m},()=>new Array(m).fill(0));const b=new Array(m).fill(0);
+  const pw=xv=>{const p=[1];for(let d=1;d<=2*deg;d++)p.push(p[d-1]*xv);return p;};
+  for(let k=0;k<x.length;k++){const p=pw(x[k]);for(let i=0;i<m;i++){for(let j=0;j<m;j++)A[i][j]+=p[i+j];b[i]+=p[i]*y[k];}}
+  for(let i=0;i<m;i++){let piv=i;for(let r=i+1;r<m;r++)if(Math.abs(A[r][i])>Math.abs(A[piv][i]))piv=r;
+    [A[i],A[piv]]=[A[piv],A[i]];[b[i],b[piv]]=[b[piv],b[i]];
+    for(let r=0;r<m;r++){if(r===i)continue;const f=A[r][i]/(A[i][i]||1e-9);
+      for(let c=i;c<m;c++)A[r][c]-=f*A[i][c];b[r]-=f*b[i];}}
+  const co=A.map((row,i)=>b[i]/(row[i]||1e-9));
+  return {coef:co,predict:xv=>{let s=0,p=1;for(let d=0;d<m;d++){s+=co[d]*p;p*=xv;}return s;}};}
+function loessPredictor(x,y,frac=0.35){
+  const pts=x.map((xv,i)=>[xv,y[i]]).sort((a,b)=>a[0]-b[0]);
+  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);const k=Math.max(4,Math.floor(frac*xs.length));
+  return xv=>{const d=xs.map(v=>Math.abs(v-xv));
+    const order=d.map((v,i)=>[v,i]).sort((a,b)=>a[0]-b[0]).slice(0,k);const hmax=order[order.length-1][0]||1;
+    let sw=0,swx=0,swy=0,swxx=0,swxy=0;
+    for(const [dist,i] of order){const u=dist/hmax;const w=Math.pow(1-u*u*u,3);
+      sw+=w;swx+=w*xs[i];swy+=w*ys[i];swxx+=w*xs[i]*xs[i];swxy+=w*xs[i]*ys[i];}
+    const denom=sw*swxx-swx*swx;if(Math.abs(denom)<1e-9)return swy/sw;
+    const b=(sw*swxy-swx*swy)/denom;const a=(swy-b*swx)/sw;return a+b*xv;};}
+
+// ---------- 4. DOM ----------
+const $=id=>document.getElementById(id);
+const plot=$('plot'),overlay=$('overlay'),ctx=plot.getContext('2d'),octx=overlay.getContext('2d');
+const wrap=$('plotWrap'),tooltip=$('tooltip'),readout=$('readout'),hintEl=$('hint');
+let PAD={l:64,r:18,t:18,b:48},W=0,H=0,DPR=window.devicePixelRatio||1;
+const getCSS=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+// ---------- 5. Accessors ----------
+function activeRows(){ return DATA.map((d,i)=>({...d,_i:i})); }
+function seriesGroups(){
+  if(ST.groupBy==='none')return [{key:'all',name:'All data',color:'#4ea1ff',rows:activeRows()}];
+  return SERIES.map(s=>({...s,rows:activeRows().filter(r=>r.series===s.key)}));
+}
+function dataBounds(rows){let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  for(const r of rows){const x=r[ST.xCol],y=r[ST.yCol];if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+  const px=(x1-x0)*0.04||1,py=(y1-y0)*0.06||1;return {x0:x0-px,x1:x1+px,y0:y0-py,y1:y1+py};}
+
+// ---------- 6. Transforms ----------
+function tx(x){const v=ST.view;const xx=ST.xLog?Math.log10(Math.max(x,1e-6)):x;
+  const a=ST.xLog?Math.log10(Math.max(v.x0,1e-6)):v.x0,b=ST.xLog?Math.log10(Math.max(v.x1,1e-6)):v.x1;
+  return PAD.l+(xx-a)/(b-a)*(W-PAD.l-PAD.r);}
+function ty(y){const v=ST.view;const yy=ST.yLog?Math.log10(Math.max(y,1e-6)):y;
+  const a=ST.yLog?Math.log10(Math.max(v.y0,1e-6)):v.y0,b=ST.yLog?Math.log10(Math.max(v.y1,1e-6)):v.y1;
+  return H-PAD.b-(yy-a)/(b-a)*(H-PAD.t-PAD.b);}
+function invX(px){const v=ST.view;const a=ST.xLog?Math.log10(v.x0):v.x0,b=ST.xLog?Math.log10(v.x1):v.x1;
+  const lin=a+(px-PAD.l)/(W-PAD.l-PAD.r)*(b-a);return ST.xLog?Math.pow(10,lin):lin;}
+function invY(px){const v=ST.view;const a=ST.yLog?Math.log10(v.y0):v.y0,b=ST.yLog?Math.log10(v.y1):v.y1;
+  const lin=a+(H-PAD.b-px)/(H-PAD.t-PAD.b)*(b-a);return ST.yLog?Math.pow(10,lin):lin;}
+
+// ---------- 7. Rendering ----------
+function resize(){W=wrap.clientWidth;H=wrap.clientHeight;
+  for(const c of [plot,overlay]){c.width=W*DPR;c.height=H*DPR;c.getContext('2d').setTransform(DPR,0,0,DPR,0,0);}draw();}
+function niceTicks(lo,hi,n){const span=hi-lo,step0=span/n,mag=Math.pow(10,Math.floor(Math.log10(step0)));
+  const norm=step0/mag;let step=mag*(norm<1.5?1:norm<3?2:norm<7?5:10);
+  const start=Math.ceil(lo/step)*step,out=[];for(let v=start;v<=hi+1e-9;v+=step)out.push(v);return out;}
+function fmt(v){if(Math.abs(v)>=1000)return (v/1000).toFixed(v%1000?1:0)+'k';
+  return Math.abs(v)<1?v.toFixed(2):v.toFixed(Math.abs(v)<100?1:0);}
+function drawAxes(){ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle=getCSS('--grid');ctx.fillStyle=getCSS('--text-dim');ctx.lineWidth=1;
+  ctx.font='11px Segoe UI';ctx.textAlign='center';ctx.textBaseline='top';const v=ST.view;
+  for(const t of niceTicks(v.x0,v.x1,7)){const X=tx(t);if(X<PAD.l-1||X>W-PAD.r+1)continue;
+    ctx.beginPath();ctx.moveTo(X,PAD.t);ctx.lineTo(X,H-PAD.b);ctx.stroke();ctx.fillText(fmt(t),X,H-PAD.b+6);}
+  ctx.textAlign='right';ctx.textBaseline='middle';
+  for(const t of niceTicks(v.y0,v.y1,6)){const Y=ty(t);if(Y<PAD.t-1||Y>H-PAD.b+1)continue;
+    ctx.beginPath();ctx.moveTo(PAD.l,Y);ctx.lineTo(W-PAD.r,Y);ctx.stroke();ctx.fillText(fmt(t),PAD.l-8,Y);}
+  ctx.fillStyle=getCSS('--text');ctx.font='12px Segoe UI';ctx.textAlign='center';ctx.textBaseline='bottom';
+  ctx.fillText(ST.xCol+(ST.xLog?' (log)':''),PAD.l+(W-PAD.l-PAD.r)/2,H-6);
+  ctx.save();ctx.translate(14,PAD.t+(H-PAD.t-PAD.b)/2);ctx.rotate(-Math.PI/2);ctx.textBaseline='top';
+  ctx.fillText(ST.yCol+(ST.yLog?' (log)':''),0,0);ctx.restore();
+  ctx.strokeStyle=getCSS('--border');ctx.strokeRect(PAD.l,PAD.t,W-PAD.l-PAD.r,H-PAD.t-PAD.b);}
+function viridis(t){t=Math.max(0,Math.min(1,t));
+  const stops=[[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+  const f=t*(stops.length-1),i=Math.floor(f),r=f-i;const a=stops[i],b=stops[Math.min(i+1,stops.length-1)];
+  return `rgb(${a[0]+(b[0]-a[0])*r|0},${a[1]+(b[1]-a[1])*r|0},${a[2]+(b[2]-a[2])*r|0})`;}
+function drawMarker(c,x,y,s,shape){c.beginPath();
+  switch(shape){
+    case 'square':c.rect(x-s,y-s,2*s,2*s);break;
+    case 'diamond':c.moveTo(x,y-s);c.lineTo(x+s,y);c.lineTo(x,y+s);c.lineTo(x-s,y);c.closePath();break;
+    case 'triangle':c.moveTo(x,y-s);c.lineTo(x+s,y+s);c.lineTo(x-s,y+s);c.closePath();break;
+    case 'cross':c.moveTo(x-s,y);c.lineTo(x+s,y);c.moveTo(x,y-s);c.lineTo(x,y+s);break;
+    default:c.arc(x,y,s,0,2*Math.PI);}}
+function densityLayer(rows){if(ST.densMode==='points')return;
+  const cols=ST.densMode==='hexbin'?42:60,gw=(W-PAD.l-PAD.r)/cols;const grid={};let maxc=0;
+  for(const r of rows){const X=tx(r[ST.xCol]),Y=ty(r[ST.yCol]);
+    if(X<PAD.l||X>W-PAD.r||Y<PAD.t||Y>H-PAD.b)continue;
+    const gx=Math.floor((X-PAD.l)/gw),gy=Math.floor((Y-PAD.t)/gw);const k=gx+','+gy;
+    grid[k]=(grid[k]||0)+1;if(grid[k]>maxc)maxc=grid[k];}
+  if(ST.densMode==='hexbin'){for(const k in grid){const [gx,gy]=k.split(',').map(Number);
+    const t=grid[k]/maxc;ctx.fillStyle=viridis(t);ctx.globalAlpha=0.85;ctx.fillRect(PAD.l+gx*gw,PAD.t+gy*gw,gw-1,gw-1);}ctx.globalAlpha=1;}
+  else{for(const k in grid){const [gx,gy]=k.split(',').map(Number);const t=grid[k]/maxc;const band=Math.ceil(t*5)/5;
+    ctx.fillStyle=viridis(band);ctx.globalAlpha=0.16+band*0.18;ctx.fillRect(PAD.l+gx*gw,PAD.t+gy*gw,gw,gw);}ctx.globalAlpha=1;}}
+function drawEllipse(rows,color){if(rows.length<5)return;
+  const xs=rows.map(r=>r[ST.xCol]),ys=rows.map(r=>r[ST.yCol]);const mx=mean(xs),my=mean(ys);
+  let cxx=0,cyy=0,cxy=0;for(let i=0;i<xs.length;i++){const dx=xs[i]-mx,dy=ys[i]-my;cxx+=dx*dx;cyy+=dy*dy;cxy+=dx*dy;}
+  const n=xs.length-1;cxx/=n;cyy/=n;cxy/=n;const tr=cxx+cyy;
+  const l1=tr/2+Math.sqrt(Math.max(0,tr*tr/4-(cxx*cyy-cxy*cxy))),l2=tr/2-Math.sqrt(Math.max(0,tr*tr/4-(cxx*cyy-cxy*cxy)));
+  const ang=Math.atan2(l1-cxx,cxy)||0,k=Math.sqrt(5.991);
+  const ax=k*Math.sqrt(Math.max(l1,0)),ay=k*Math.sqrt(Math.max(l2,0));
+  ctx.save();ctx.translate(tx(mx),ty(my));const sx=(tx(mx+1)-tx(mx)),sy=(ty(my+1)-ty(my));ctx.beginPath();
+  for(let a=0;a<=2*Math.PI+0.01;a+=0.1){const ex=ax*Math.cos(a),ey=ay*Math.sin(a);
+    const rx=ex*Math.cos(ang)-ey*Math.sin(ang),ry=ex*Math.sin(ang)+ey*Math.cos(ang);
+    const px=rx*sx,py=ry*sy;a===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}
+  ctx.strokeStyle=color;ctx.globalAlpha=0.9;ctx.setLineDash([5,4]);ctx.lineWidth=1.5;ctx.stroke();
+  ctx.setLineDash([]);ctx.globalAlpha=1;ctx.restore();}
+function fitFor(rows){const xs=rows.map(r=>r[ST.xCol]),ys=rows.map(r=>r[ST.yCol]);if(rows.length<3)return null;
+  switch(ST.regModel){case 'ols':return {f:olsFit(xs,ys),label:'OLS'};
+    case 'robust':return {f:theilSen(xs,ys),label:'Theil–Sen'};
+    case 'poly2':return {f:polyFit(xs,ys,2),label:'Poly-2'};
+    case 'poly3':return {f:polyFit(xs,ys,3),label:'Poly-3'};
+    case 'loess':return {f:{predict:loessPredictor(xs,ys)},label:'LOESS'};default:return null;}}
+function drawTrend(rows,color){const fit=fitFor(rows);if(!fit)return null;
+  const xs=rows.map(r=>r[ST.xCol]);const xmin=Math.min(...xs),xmax=Math.max(...xs);
+  let ss=0;for(const r of rows){const e=r[ST.yCol]-fit.f.predict(r[ST.xCol]);ss+=e*e;}
+  const resStd=Math.sqrt(ss/Math.max(1,rows.length-2));const N=80,line=[];
+  for(let i=0;i<=N;i++){const xv=xmin+(xmax-xmin)*i/N;line.push([xv,fit.f.predict(xv)]);}
+  if(ST.ciBand){ctx.beginPath();
+    for(let i=0;i<=N;i++){const X=tx(line[i][0]),Y=ty(line[i][1]+1.96*resStd);i===0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+    for(let i=N;i>=0;i--){const X=tx(line[i][0]),Y=ty(line[i][1]-1.96*resStd);ctx.lineTo(X,Y);}
+    ctx.closePath();ctx.fillStyle=color;ctx.globalAlpha=0.12;ctx.fill();ctx.globalAlpha=1;}
+  ctx.beginPath();for(let i=0;i<=N;i++){const X=tx(line[i][0]),Y=ty(line[i][1]);i===0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+  ctx.strokeStyle=color;ctx.lineWidth=2.2;ctx.stroke();return {fit,resStd};}
+function draw(){drawAxes();const groups=seriesGroups();
+  if(ST.densMode!=='points'){const all=[];groups.forEach(g=>all.push(...g.rows));densityLayer(all);}
+  let cbMin=0,cbMax=1;
+  if(ST.colorBy!=='series'&&ST.colorBy!=='none'){const vals=DATA.map(d=>d[ST.colorBy]);cbMin=Math.min(...vals);cbMax=Math.max(...vals);}
+  let sbMin=0,sbMax=1;if(ST.sizeBy!=='none'){const vals=DATA.map(d=>d[ST.sizeBy]);sbMin=Math.min(...vals);sbMax=Math.max(...vals);}
+  const sel=ST.selection;
+  for(const g of groups){for(const r of g.rows){const X=tx(r[ST.xCol]),Y=ty(r[ST.yCol]);
+    if(X<PAD.l-5||X>W-PAD.r+5||Y<PAD.t-5||Y>H-PAD.b+5)continue;
+    let s=ST.ptSize;if(ST.sizeBy!=='none')s=3+10*((r[ST.sizeBy]-sbMin)/((sbMax-sbMin)||1));
+    let col=g.color;if(ST.colorBy!=='series'&&ST.colorBy!=='none')col=viridis((r[ST.colorBy]-cbMin)/((cbMax-cbMin)||1));
+    else if(ST.colorBy==='none')col='#7f8794';
+    const dim=sel&&!sel.has(r._i);ctx.globalAlpha=dim?0.08:ST.opacity;
+    ctx.fillStyle=col;ctx.strokeStyle=col;ctx.lineWidth=1.4;drawMarker(ctx,X,Y,s,ST.shape);
+    if(ST.shape==='cross')ctx.stroke();else ctx.fill();
+    if(sel&&sel.has(r._i)){ctx.globalAlpha=1;ctx.strokeStyle='#fff';ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.arc(X,Y,s+2,0,2*Math.PI);ctx.stroke();}}ctx.globalAlpha=1;}
+  if(ST.ellipse)for(const g of groups)drawEllipse(g.rows,g.color);
+  const fitInfo=[];
+  if(ST.regModel!=='none'){
+    if(ST.perSeries){for(const g of groups){const t=drawTrend(g.rows,g.color);if(t)fitInfo.push({g,...t});}}
+    else{const all=[];groups.forEach(g=>all.push(...g.rows));const t=drawTrend(all,'#e8edf4');if(t)fitInfo.push({g:{rows:all,color:'#e8edf4'},...t});}
+    if(ST.markOutliers){for(const fi of fitInfo){for(const r of fi.g.rows){
+      const e=r[ST.yCol]-fi.fit.f.predict(r[ST.xCol]);
+      if(Math.abs(e)>3*fi.resStd){const X=tx(r[ST.xCol]),Y=ty(r[ST.yCol]);
+        ctx.beginPath();ctx.arc(X,Y,ST.ptSize+4,0,2*Math.PI);ctx.strokeStyle=getCSS('--bad');ctx.lineWidth=1.6;ctx.stroke();}}}}}
+  if(ST.usl>0){const Y=ty(ST.usl);if(Y>PAD.t&&Y<H-PAD.b){ctx.setLineDash([8,5]);ctx.strokeStyle=getCSS('--bad');ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(PAD.l,Y);ctx.lineTo(W-PAD.r,Y);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=getCSS('--bad');ctx.font='11px Segoe UI';ctx.textAlign='right';ctx.textBaseline='bottom';
+    ctx.fillText('USL = '+ST.usl,W-PAD.r-4,Y-2);}}
+  buildLegend(groups,cbMin,cbMax);refreshSidePanels();}
+function buildLegend(groups,cbMin,cbMax){const L=$('legend');
+  if(ST.colorBy!=='series'&&ST.colorBy!=='none'){
+    L.innerHTML=`<div style="margin-bottom:4px;color:var(--text-dim)">${ST.colorBy}</div>
+      <div style="width:120px;height:10px;border-radius:3px;background:linear-gradient(90deg,${viridis(0)},${viridis(.5)},${viridis(1)})"></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim)"><span>${fmt(cbMin)}</span><span>${fmt(cbMax)}</span></div>`;return;}
+  L.innerHTML=groups.map(g=>`<div class="lrow"><span class="swatch" style="background:${g.color}"></span>${g.name} <span style="color:var(--text-dim)">(${g.rows.length})</span></div>`).join('');}
+
+// ---------- 8. Left channels + series + right tabs ----------
+function refreshSidePanels(){ buildChannels(); buildStats(); buildInsights(); }
+function buildChannels(){
+  $('chanList').innerHTML = CHANNELS.map(c=>`
+    <div class="chan">
+      <span class="swatch"></span><span class="name">${c}</span>
+      <span class="assign">
+        <button class="${c===ST.xCol?'x':''}" data-axis="x" data-col="${c}">X</button>
+        <button class="${c===ST.yCol?'y':''}" data-axis="y" data-col="${c}">Y</button>
+      </span>
+    </div>`).join('');
+  $('chanList').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    const col=b.dataset.col;
+    if(b.dataset.axis==='x'){ST.xCol=col;$('xCol').value=col;} else {ST.yCol=col;$('yCol').value=col;}
+    resetView();
+  }));
+  const groups=seriesGroups();
+  $('seriesList').innerHTML = groups.map(g=>`
+    <div class="series-row"><span class="swatch" style="background:${g.color}"></span>
+      <span class="name">${g.name}</span><span class="count">${g.rows.length} pts</span></div>`).join('');
+}
+function statRows(rows){const xs=rows.map(r=>r[ST.xCol]),ys=rows.map(r=>r[ST.yCol]);if(rows.length<3)return null;
+  const r=pearson(xs,ys),rho=spearman(xs,ys);const n=rows.length,t=r*Math.sqrt((n-2)/(1-r*r||1e-9));
+  const p=2*(1-studentCdf(Math.abs(t),n-2));const fit=ST.regModel!=='none'?fitFor(rows):null;
+  return {n,r,rho,p,fit,yMean:mean(ys),yStd:std(ys),xMean:mean(xs),xStd:std(xs)};}
+function studentCdf(t,df){const x=df/(df+t*t);let a=0.5*ibeta(df/2,0.5,x);return t>0?1-a:a;}
+function ibeta(a,b,x){if(x<=0)return 0;if(x>=1)return 1;const lbeta=lgammaSum(a,b);
+  const front=Math.exp(Math.log(x)*a+Math.log(1-x)*b-lbeta)/a;let f=1,c=1,d=0;
+  for(let i=0;i<=100;i++){let m=i/2,num;if(i===0)num=1;else if(i%2===0)num=(m*(b-m)*x)/((a+2*m-1)*(a+2*m));
+    else{m=(i-1)/2;num=-((a+m)*(a+b+m)*x)/((a+2*m)*(a+2*m+1));}
+    d=1+num*d;if(Math.abs(d)<1e-30)d=1e-30;d=1/d;c=1+num/c;if(Math.abs(c)<1e-30)c=1e-30;
+    f*=c*d;if(Math.abs(1-c*d)<1e-8)break;}return front*(f-1);}
+function lgammaSum(a,b){return lg(a)+lg(b)-lg(a+b);}
+function lg(z){const g=7,c=[0.99999999999980993,676.5203681218851,-1259.1392167224028,771.32342877765313,-176.61502916214059,12.507343278686905,-0.13857109526572012,9.9843695780195716e-6,1.5056327351493116e-7];
+  if(z<0.5)return Math.log(Math.PI/Math.sin(Math.PI*z))-lg(1-z);
+  z-=1;let x=c[0];for(let i=1;i<g+2;i++)x+=c[i]/(z+i);const t=z+g+0.5;
+  return 0.5*Math.log(2*Math.PI)+(z+0.5)*Math.log(t)-t+Math.log(x);}
+function pPill(p){return p<0.001?'<span class="pill good">p&lt;0.001</span>':
+  p<0.05?`<span class="pill good">p=${p.toFixed(3)}</span>`:`<span class="pill warn">p=${p.toFixed(2)}</span>`;}
+function rStrength(r){const a=Math.abs(r);return a>0.7?'strong':a>0.4?'moderate':a>0.2?'weak':'negligible';}
+function buildStats(){const groups=seriesGroups();
+  let scope=activeRows(),scopeLabel='All data';
+  if(ST.selection){scope=activeRows().filter(r=>ST.selection.has(r._i));scopeLabel=`Selection (${scope.length} pts)`;}
+  const s=statRows(scope);let html=`<div class="stat-group-title">Correlation — ${scopeLabel}</div>`;
+  if(s){html+=`<table>
+    <tr><td>Pearson r</td><td>${s.r.toFixed(3)} ${pPill(s.p)}</td></tr>
+    <tr><td>Spearman ρ</td><td>${s.rho.toFixed(3)}</td></tr>
+    <tr><td>R²</td><td>${(s.r*s.r).toFixed(3)}</td></tr>
+    <tr><td>n</td><td>${s.n}</td></tr></table>`;
+    if(s.fit){const sl=s.fit.f.slope,ic=s.fit.f.intercept;
+      html+=`<div class="stat-group-title">${s.fit.label} fit</div><table>`;
+      if(sl!==undefined)html+=`<tr><td>Slope</td><td>${sl.toPrecision(3)}</td></tr><tr><td>Intercept</td><td>${ic.toFixed(3)}</td></tr>`;
+      else html+=`<tr><td>Type</td><td>local non-parametric</td></tr>`;html+=`</table>`;}}
+  else html+=`<div style="padding:10px 12px;color:var(--text-dim)">Not enough points.</div>`;
+  html+=`<div class="stat-group-title">Per channel (scope)</div><table><tr><th>Channel</th><th>Mean</th><th>Std</th></tr>`;
+  if(s){html+=`<tr><td>${ST.xCol}</td><td>${fmt(s.xMean)}</td><td>${fmt(s.xStd)}</td></tr>
+    <tr><td>${ST.yCol}</td><td>${fmt(s.yMean)}</td><td>${fmt(s.yStd)}</td></tr>`;}html+=`</table>`;
+  if(ST.usl>0){const ex=scope.filter(r=>r[ST.yCol]>ST.usl).length;const pct=(100*ex/scope.length).toFixed(1);
+    html+=`<div class="stat-group-title">Spec limit</div><table>
+      <tr><td>Exceed USL</td><td>${ex} (${pct}%) ${ex/scope.length>0.01?'<span class="pill bad">high</span>':'<span class="pill good">ok</span>'}</td></tr></table>`;}
+  $('tab-stats').innerHTML=html;}
+function buildInsights(){const groups=seriesGroups();const out=[];const all=activeRows();const s=statRows(all);
+  if(s){const dir=s.r>0?'increases':'decreases';
+    out.push({i:'📈',c:'',t:`<b>${ST.yCol}</b> ${dir} with <b>${ST.xCol}</b> — ${rStrength(s.r)} correlation (Pearson r=${s.r.toFixed(2)}, ${s.p<0.001?'p<0.001':'p='+s.p.toFixed(3)}).`});
+    if(Math.abs(s.r-s.rho)>0.12)out.push({i:'↪️',c:'warn',t:`Spearman ρ (${s.rho.toFixed(2)}) differs from Pearson r — relationship looks <b>non-linear</b>. Try a polynomial or LOESS fit.`});}
+  if(ST.groupBy!=='none'){const slopes=groups.map(g=>{const xs=g.rows.map(r=>r[ST.xCol]),ys=g.rows.map(r=>r[ST.yCol]);return {g,sl:olsFit(xs,ys).slope};});
+    slopes.sort((a,b)=>b.sl-a.sl);
+    out.push({i:'🔬',c:'',t:`Steepest trend: <b>${slopes[0].g.name}</b> (slope ${slopes[0].sl.toPrecision(2)}), flattest: <b>${slopes[slopes.length-1].g.name}</b>. Sensitivity to ${ST.xCol} varies by series.`});}
+  if(ST.regModel!=='none'){let nOut=0;const fit=fitFor(all);if(fit){let ss=0;for(const r of all){const e=r[ST.yCol]-fit.f.predict(r[ST.xCol]);ss+=e*e;}
+    const rs=Math.sqrt(ss/all.length);for(const r of all){if(Math.abs(r[ST.yCol]-fit.f.predict(r[ST.xCol]))>3*rs)nOut++;}
+    if(nOut)out.push({i:'⚠️',c:'bad',t:`<b>${nOut}</b> residual outliers beyond ±3σ from the trend — circled in red. Likely measurement faults or transient events.`});}}
+  const ys=all.map(r=>r[ST.yCol]);const sk=skew(ys);
+  if(Math.abs(sk)>0.8)out.push({i:'📊',c:'warn',t:`<b>${ST.yCol}</b> distribution is ${sk>0?'right':'left'}-skewed (skew=${sk.toFixed(1)}). Consider a log axis or robust statistics.`});
+  if(ST.selection)out.push({i:'🎯',c:'',t:`<b>${ST.selection.size}</b> points selected. In the real widget this <b>cross-filters every linked view</b> (histogram, box, time graph) via the SELECTION_CHANGED event.`});
+  out.push({i:'💡',c:'',t:`This panel mirrors Tableau "Explain Data" / Power BI "Key Influencers" — auto-generated, backed by the proposed C++ <code>mp_cpp::stats</code> core.`});
+  $('tab-insights').innerHTML=out.map(o=>`<div class="insight ${o.c}"><span class="ico">${o.i}</span><span class="txt">${o.t}</span></div>`).join('');}
+function skew(a){const m=mean(a),sd=std(a);return mean(a.map(v=>Math.pow((v-m)/(sd||1),3)));}
+
+// ---------- 9. Interaction ----------
+let dragSel=null,hoverPt=null;
+overlay.addEventListener('mousemove',e=>{const rect=overlay.getBoundingClientRect(),mx=e.clientX-rect.left,my=e.clientY-rect.top;
+  const dx=invX(mx),dy=invY(my);
+  if(mx>PAD.l&&mx<W-PAD.r&&my>PAD.t&&my<H-PAD.b)readout.innerHTML=`${ST.xCol}: <b>${fmt(dx)}</b> &nbsp; ${ST.yCol}: <b>${fmt(dy)}</b>`;
+  if(dragSel){dragSel.pts.push([mx,my]);drawOverlay();return;}
+  let best=null,bestD=120;
+  for(const r of activeRows()){const X=tx(r[ST.xCol]),Y=ty(r[ST.yCol]);const d=(X-mx)**2+(Y-my)**2;if(d<bestD){bestD=d;best=r;}}
+  hoverPt=best;drawOverlay();
+  if(best){tooltip.style.display='block';tooltip.style.left=(tx(best[ST.xCol])+12)+'px';tooltip.style.top=(ty(best[ST.yCol])-10)+'px';
+    tooltip.innerHTML=`<div><b>${SERIES.find(s=>s.key===best.series)?.name||'Row'}</b></div>
+      <div><span class="k">${ST.xCol}:</span> ${best[ST.xCol].toFixed(1)}</div>
+      <div><span class="k">${ST.yCol}:</span> ${best[ST.yCol].toFixed(2)}</div>
+      ${ST.colorBy!=='series'&&ST.colorBy!=='none'?`<div><span class="k">${ST.colorBy}:</span> ${best[ST.colorBy].toFixed(1)}</div>`:''}`;}
+  else tooltip.style.display='none';});
+overlay.addEventListener('mousedown',e=>{if(!ST.selMode)return;const rect=overlay.getBoundingClientRect();
+  dragSel={pts:[[e.clientX-rect.left,e.clientY-rect.top]]};});
+window.addEventListener('mouseup',()=>{if(dragSel&&dragSel.pts.length>3){const sel=new Set();
+  for(const r of activeRows()){if(pointInPoly(tx(r[ST.xCol]),ty(r[ST.yCol]),dragSel.pts))sel.add(r._i);}
+  ST.selection=sel.size?sel:null;}dragSel=null;drawOverlay();draw();});
+overlay.addEventListener('mouseleave',()=>{hoverPt=null;tooltip.style.display='none';drawOverlay();});
+function pointInPoly(x,y,poly){let inside=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+  const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];
+  if(((yi>y)!=(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))inside=!inside;}return inside;}
+function drawOverlay(){octx.clearRect(0,0,W,H);
+  if(hoverPt){const X=tx(hoverPt[ST.xCol]),Y=ty(hoverPt[ST.yCol]);
+    octx.strokeStyle='rgba(78,161,255,.35)';octx.lineWidth=1;octx.setLineDash([3,3]);
+    octx.beginPath();octx.moveTo(X,PAD.t);octx.lineTo(X,H-PAD.b);octx.moveTo(PAD.l,Y);octx.lineTo(W-PAD.r,Y);octx.stroke();octx.setLineDash([]);
+    octx.beginPath();octx.arc(X,Y,7,0,2*Math.PI);octx.strokeStyle='#fff';octx.lineWidth=1.5;octx.stroke();}
+  if(dragSel){const p=dragSel.pts;octx.beginPath();octx.moveTo(p[0][0],p[0][1]);for(const pt of p)octx.lineTo(pt[0],pt[1]);octx.closePath();
+    octx.fillStyle='rgba(78,161,255,.12)';octx.fill();octx.strokeStyle=getCSS('--accent');octx.lineWidth=1.5;octx.setLineDash([4,3]);octx.stroke();octx.setLineDash([]);}}
+
+// ---------- 10. Rail / drawer toggling (Time-Graphics style) ----------
+function selectPanel(name){
+  if(ST.drawerOpen && ST.panel===name){ // clicking active button collapses
+    ST.drawerOpen=false; $('drawer').classList.add('collapsed');
+    $('rail').querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+    return;
+  }
+  ST.panel=name; ST.drawerOpen=true; $('drawer').classList.remove('collapsed');
+  $('rail').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.panel===name));
+  $('drawer').querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.dataset.panel===name));
+  const titles={channels:'Channels',axes:'Axes',encoding:'Encoding',markers:'Markers',density:'Density',trend:'Trend / Regression',reference:'Reference Lines'};
+  $('drawerTitle').textContent=titles[name]||name;
+  setTimeout(resize,140); // canvas re-fit after width transition
+}
+$('rail').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>selectPanel(b.dataset.panel)));
+$('drawerX').addEventListener('click',()=>{ST.drawerOpen=false;$('drawer').classList.add('collapsed');
+  $('rail').querySelectorAll('button').forEach(b=>b.classList.remove('active'));setTimeout(resize,140);});
+
+// ---------- 11. Control bindings ----------
+function bindSelect(id,key,after){const el=$(id);el.value=ST[key];
+  el.addEventListener('change',()=>{ST[key]=el.value;after&&after();draw();});}
+function setupAxisSelects(){for(const id of ['xCol','yCol']){const el=$(id);
+  el.innerHTML=CHANNELS.map(c=>`<option ${c===ST[id]?'selected':''}>${c}</option>`).join('');}}
+setupAxisSelects();
+bindSelect('xCol','xCol',resetView);bindSelect('yCol','yCol',resetView);
+bindSelect('groupBy','groupBy');bindSelect('colorBy','colorBy');bindSelect('sizeBy','sizeBy');
+bindSelect('shape','shape');bindSelect('densMode','densMode');bindSelect('regModel','regModel');
+$('ptSize').addEventListener('input',e=>{ST.ptSize=+e.target.value;$('ptSizeV').textContent=e.target.value;draw();});
+$('opacity').addEventListener('input',e=>{ST.opacity=e.target.value/100;$('opacityV').textContent=e.target.value+'%';draw();});
+$('usl').addEventListener('input',e=>{ST.usl=+e.target.value;draw();});
+for(const [id,key] of [['xLog','xLog'],['yLog','yLog'],['ellipse','ellipse'],['ciBand','ciBand'],['perSeries','perSeries'],['markOutliers','markOutliers']])
+  $(id).addEventListener('change',e=>{ST[key]=e.target.checked;draw();});
+$('btnSelMode').addEventListener('click',()=>{ST.selMode=!ST.selMode;$('btnSelMode').classList.toggle('active',ST.selMode);
+  hintEl.style.display=ST.selMode?'block':'none';overlay.style.cursor=ST.selMode?'cell':'crosshair';});
+$('btnClearSel').addEventListener('click',()=>{ST.selection=null;draw();drawOverlay();});
+$('btnReset').addEventListener('click',resetView);
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');
+  for(const n of ['stats','insights'])$('tab-'+n).style.display=(n===t.dataset.tab)?'block':'none';}));
+function resetView(){const all=[];seriesGroups().forEach(g=>all.push(...g.rows));ST.view=dataBounds(all);draw();}
+
+// ---------- 12. Init ----------
+resetView();
+new ResizeObserver(resize).observe(wrap);
+resize();
+</script>
+</body>
+</html>
