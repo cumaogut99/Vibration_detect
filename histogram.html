@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MachinePulseAI — Histogram (Design Mockup)</title>
+<style>
+  :root{--bg:#1b1e24;--panel:#23272f;--panel-2:#2b303a;--rail:#1d2128;--border:#353b46;
+    --text:#d7dce3;--text-dim:#8b93a1;--accent:#4ea1ff;--accent-2:#ffb454;--good:#4ec97a;--bad:#ff6b6b;--grid:#2e333d;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:"Segoe UI",Roboto,system-ui,sans-serif;font-size:13px;overflow:hidden;}
+  .app{display:flex;flex-direction:column;height:100vh;}
+  .toolbar{display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--panel);border-bottom:1px solid var(--border);}
+  .toolbar .title{font-weight:600;font-size:14px;}
+  .toolbar .title .badge{font-size:10px;color:var(--text-dim);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:8px;font-weight:400;}
+  .spacer{flex:1;}
+  .tbtn{background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:5px;cursor:pointer;font-size:12px;}
+  .tbtn:hover{border-color:var(--accent);} .tbtn.active{background:var(--accent);color:#0c0f14;border-color:var(--accent);}
+  .body{display:flex;flex:1;min-height:0;}
+  .rail{width:56px;background:var(--rail);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding-top:6px;gap:2px;}
+  .rail button{width:48px;height:50px;background:transparent;border:none;color:var(--text-dim);cursor:pointer;border-radius:7px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:9.5px;}
+  .rail button .ico{font-size:18px;line-height:1;}
+  .rail button:hover{background:var(--panel-2);color:var(--text);}
+  .rail button.active{background:var(--panel);color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);}
+  .drawer{width:256px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;transition:width .12s ease;flex-shrink:0;}
+  .drawer.collapsed{width:0;border-right:none;overflow:hidden;}
+  .drawer-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border);
+    font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);}
+  .drawer-head .x{cursor:pointer;font-size:15px;} .drawer-head .x:hover{color:var(--text);}
+  .panel{display:none;} .panel.active{display:block;}
+  .section{padding:10px 12px;border-bottom:1px solid var(--grid);}
+  .row{display:flex;align-items:center;justify-content:space-between;margin:6px 0;gap:8px;}
+  .row label{color:var(--text-dim);font-size:12px;}
+  select,input[type="number"]{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:12px;max-width:132px;}
+  input[type="range"]{width:118px;accent-color:var(--accent);} input[type="checkbox"]{accent-color:var(--accent);}
+  .val{color:var(--text);font-variant-numeric:tabular-nums;min-width:30px;text-align:right;}
+  .hintnote{color:var(--text-dim);font-size:11px;line-height:1.4;}
+  .chan{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--grid);cursor:pointer;}
+  .chan:hover{background:var(--panel-2);} .chan.sel{background:rgba(78,161,255,.1);}
+  .chan .swatch{width:11px;height:11px;border-radius:3px;flex-shrink:0;background:#3a4150;}
+  .chan .name{flex:1;} .chan .tag{color:var(--accent);font-size:11px;font-weight:600;}
+  .grp-title{padding:9px 12px 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);font-weight:600;}
+  .pane-center{flex:1;min-width:0;position:relative;display:flex;flex-direction:column;}
+  .plot-wrap{flex:1;position:relative;min-height:0;}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  .readout{position:absolute;left:12px;bottom:10px;background:rgba(20,23,28,.85);border:1px solid var(--border);border-radius:6px;
+    padding:6px 10px;font-size:12px;color:var(--text-dim);font-variant-numeric:tabular-nums;pointer-events:none;}
+  .readout b{color:var(--text);}
+  .legend{position:absolute;right:12px;top:10px;background:rgba(20,23,28,.7);border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:12px;pointer-events:none;}
+  .legend .lrow{display:flex;align-items:center;gap:7px;margin:2px 0;} .legend .swatch{width:12px;height:12px;border-radius:3px;}
+  .pane-right{width:300px;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;}
+  .tabs{display:flex;border-bottom:1px solid var(--border);}
+  .tab{flex:1;text-align:center;padding:8px 4px;cursor:pointer;font-size:12px;color:var(--text-dim);border-bottom:2px solid transparent;}
+  .tab.active{color:var(--text);border-bottom-color:var(--accent);}
+  .tab-body{flex:1;overflow-y:auto;padding:4px 0;}
+  table{width:100%;border-collapse:collapse;font-size:12px;} th,td{text-align:right;padding:5px 12px;border-bottom:1px solid var(--grid);}
+  th:first-child,td:first-child{text-align:left;color:var(--text-dim);} td{font-variant-numeric:tabular-nums;}
+  .stat-group-title{padding:9px 12px 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);font-weight:600;}
+  .pill{font-size:11px;padding:1px 7px;border-radius:10px;}
+  .pill.good{background:rgba(78,201,122,.15);color:var(--good);} .pill.warn{background:rgba(255,180,84,.15);color:var(--accent-2);}
+  .pill.bad{background:rgba(255,107,107,.15);color:var(--bad);}
+  .insight{display:flex;gap:9px;padding:10px 12px;border-bottom:1px solid var(--grid);line-height:1.45;}
+  .insight .ico{font-size:15px;flex-shrink:0;} .insight .txt b{color:#fff;}
+  .insight.warn{background:rgba(255,180,84,.05);} .insight.bad{background:rgba(255,107,107,.06);}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar">
+    <span class="title">Histogram <span class="badge">Distribution Diagnostics · Design Mockup</span></span>
+    <span class="spacer"></span>
+    <button class="tbtn" id="btnReset">Reset View</button>
+    <button class="tbtn" title="Mock only">⤓ Export</button>
+  </div>
+  <div class="body">
+    <div class="rail" id="rail">
+      <button data-panel="channels" class="active"><span class="ico">📑</span>Channels</button>
+      <button data-panel="binning"><span class="ico">▥</span>Binning</button>
+      <button data-panel="curves"><span class="ico">〽️</span>Curves</button>
+      <button data-panel="capability"><span class="ico">🎯</span>Capability</button>
+      <button data-panel="display"><span class="ico">🖥️</span>Display</button>
+    </div>
+    <div class="drawer" id="drawer">
+      <div class="drawer-head"><span id="drawerTitle">Channels</span><span class="x" id="drawerX">✕</span></div>
+      <div class="panel active" data-panel="channels">
+        <div class="grp-title">Channel — click to plot</div>
+        <div id="chanList"></div>
+        <div class="section">
+          <div class="row"><label>Group by</label>
+            <select id="groupBy"><option value="none" selected>None</option><option value="bearing">Bearing</option></select></div>
+          <div class="hintnote">Group-by overlays a histogram per category (ridgeline-style comparison).</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="binning">
+        <div class="section">
+          <div class="row"><label>Bin rule</label>
+            <select id="binRule">
+              <option value="fd" selected>Freedman–Diaconis</option>
+              <option value="scott">Scott</option>
+              <option value="sturges">Sturges</option>
+              <option value="manual">Manual</option>
+            </select></div>
+          <div class="row"><label>Bins (manual)</label><input type="range" id="bins" min="5" max="120" value="30"><span class="val" id="binsV">30</span></div>
+          <div class="hintnote">FD is robust for skewed / large data; Sturges assumes normality. Auto rule shown in Statistics.</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="curves">
+        <div class="section">
+          <div class="row"><label>KDE overlay</label><input type="checkbox" id="kde" checked></div>
+          <div class="row"><label>KDE bandwidth ×</label><input type="range" id="bw" min="30" max="250" value="100"><span class="val" id="bwV">1.0</span></div>
+          <div class="row"><label>Fit distribution</label>
+            <select id="fit">
+              <option value="none" selected>None</option>
+              <option value="normal">Normal</option>
+              <option value="lognormal">Lognormal</option>
+              <option value="weibull">Weibull</option>
+            </select></div>
+          <div class="hintnote">Fit overlay + goodness-of-fit (KS) in Statistics. Weibull is key for fatigue / life data.</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="capability">
+        <div class="section">
+          <div class="row"><label>LSL</label><input type="number" id="lsl" value="0" step="0.1" style="max-width:80px"></div>
+          <div class="row"><label>USL</label><input type="number" id="usl" value="0" step="0.1" style="max-width:80px"></div>
+          <div class="hintnote">Set limits (≠0) to draw spec lines and compute Cp / Cpk + out-of-spec ppm (semiconductor / SPC).</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="display">
+        <div class="section">
+          <div class="row"><label>Y mode</label>
+            <select id="ymode"><option value="count" selected>Count</option><option value="density">Density</option><option value="cdf">CDF (ECDF)</option></select></div>
+          <div class="row"><label>Rug plot</label><input type="checkbox" id="rug" checked></div>
+          <div class="row"><label>Mean / ±σ markers</label><input type="checkbox" id="meanMark" checked></div>
+          <div class="row"><label>Bar color</label>
+            <select id="barColor"><option value="#4ea1ff" selected>Blue</option><option value="#ffb454">Amber</option><option value="#b07cff">Violet</option><option value="#4ec97a">Green</option></select></div>
+        </div>
+      </div>
+    </div>
+    <div class="pane-center">
+      <div class="plot-wrap" id="plotWrap">
+        <canvas id="plot"></canvas><canvas id="overlay"></canvas>
+        <div class="legend" id="legend"></div>
+        <div class="readout" id="readout">Value: — &nbsp; Count: —</div>
+      </div>
+    </div>
+    <div class="pane-right">
+      <div class="tabs"><div class="tab active" data-tab="stats">Statistics</div><div class="tab" data-tab="insights">Insights</div></div>
+      <div class="tab-body" id="tab-stats"></div>
+      <div class="tab-body" id="tab-insights" style="display:none"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* MachinePulseAI — Histogram mockup. Synthetic data, no backend.
+   Features: FD/Scott/Sturges/manual binning, KDE overlay, Normal/Lognormal/Weibull
+   fit + KS goodness-of-fit, multimodality detection, Cp/Cpk capability, CDF/ECDF, rug. */
+const SERIES=[{key:'A',name:'Bearing A',color:'#4ea1ff'},{key:'B',name:'Bearing B',color:'#ffb454'},{key:'C',name:'Bearing C',color:'#b07cff'}];
+const CHANNELS=['Vibration RMS','Temperature','Bearing Clearance','Order-2 Amp'];
+function randn(){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+const DATA=[];
+for(const s of SERIES){const n=s.key==='A'?900:s.key==='B'?700:500;
+  for(let i=0;i<n;i++){
+    const vib=Math.exp(0.3+0.4*randn()+(s.key==='C'?0.3:0));               // right-skewed lognormal
+    const temp=60+8*randn()+(s.key==='B'?6:0);                            // normal
+    const clr= (Math.random()<0.5? 12+1.2*randn() : 18+1.4*randn());      // bimodal
+    const ord2=2.5*Math.pow(-Math.log(Math.random()),1/1.6);             // weibull-ish
+    DATA.push({series:s.key,'Vibration RMS':vib,'Temperature':temp,'Bearing Clearance':clr,'Order-2 Amp':ord2});}}
+const ST={col:'Vibration RMS',groupBy:'none',binRule:'fd',bins:30,kde:true,bw:1.0,fit:'none',
+  lsl:0,usl:0,ymode:'count',rug:true,meanMark:true,barColor:'#4ea1ff',
+  panel:'channels',drawerOpen:true,view:null};
+const $=id=>document.getElementById(id);
+const plot=$('plot'),overlay=$('overlay'),ctx=plot.getContext('2d'),octx=overlay.getContext('2d');
+const wrap=$('plotWrap'),readout=$('readout');
+let PAD={l:60,r:18,t:18,b:46},W=0,H=0,DPR=window.devicePixelRatio||1;
+const getCSS=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const mean=a=>a.reduce((s,v)=>s+v,0)/a.length;
+const std=a=>{const m=mean(a);return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/(a.length-1||1));};
+function quantile(sorted,q){const p=(sorted.length-1)*q,b=Math.floor(p),r=p-b;return sorted[b+1]!==undefined?sorted[b]+r*(sorted[b+1]-sorted[b]):sorted[b];}
+function skew(a){const m=mean(a),sd=std(a);return mean(a.map(v=>Math.pow((v-m)/(sd||1),3)));}
+function kurt(a){const m=mean(a),sd=std(a);return mean(a.map(v=>Math.pow((v-m)/(sd||1),4)))-3;}
+function rows(){return DATA.map(d=>({series:d.series,v:d[ST.col]})).filter(r=>isFinite(r.v));}
+function groups(){if(ST.groupBy==='none')return [{key:'all',name:ST.col,color:ST.barColor,vals:rows().map(r=>r.v)}];
+  return SERIES.map(s=>({...s,vals:rows().filter(r=>r.series===s.key).map(r=>r.v)}));}
+function allVals(){return rows().map(r=>r.v);}
+function binCount(vals){const n=vals.length,sd=std(vals),sorted=[...vals].sort((a,b)=>a-b);
+  const iqr=quantile(sorted,0.75)-quantile(sorted,0.25),range=sorted[n-1]-sorted[0]||1;
+  if(ST.binRule==='manual')return ST.bins;
+  let bw;if(ST.binRule==='fd')bw=2*iqr*Math.pow(n,-1/3);
+  else if(ST.binRule==='scott')bw=3.49*sd*Math.pow(n,-1/3);
+  else return Math.ceil(Math.log2(n))+1; // sturges
+  return Math.max(5,Math.min(200,Math.round(range/(bw||range))));}
+function histogram(vals,nbins,lo,hi){const w=(hi-lo)/nbins,counts=new Array(nbins).fill(0);
+  for(const v of vals){let i=Math.floor((v-lo)/w);if(i<0)i=0;if(i>=nbins)i=nbins-1;counts[i]++;}return {counts,w};}
+function kdeCurve(vals,xs,bwScale){const n=vals.length,sd=std(vals);const sorted=[...vals].sort((a,b)=>a-b);
+  const iqr=quantile(sorted,0.75)-quantile(sorted,0.25);const h=0.9*Math.min(sd,iqr/1.34)*Math.pow(n,-1/5)*bwScale||1;
+  return xs.map(x=>{let s=0;for(const v of vals)s+=Math.exp(-0.5*((x-v)/h)**2);return s/(n*h*Math.sqrt(2*Math.PI));});}
+function gauss(x,m,s){return Math.exp(-0.5*((x-m)/s)**2)/(s*Math.sqrt(2*Math.PI));}
+function normCdf(x,m,s){return 0.5*(1+erf((x-m)/(s*Math.SQRT2)));}
+function erf(x){const t=1/(1+0.3275911*Math.abs(x));const y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x);return x>=0?y:-y;}
+function lgamma(z){const c=[0.99999999999980993,676.5203681218851,-1259.1392167224028,771.32342877765313,-176.61502916214059,12.507343278686905,-0.13857109526572012,9.9843695780195716e-6,1.5056327351493116e-7];
+  if(z<0.5)return Math.log(Math.PI/Math.sin(Math.PI*z))-lgamma(1-z);z-=1;let x=c[0];for(let i=1;i<9;i++)x+=c[i]/(z+i);const t=z+7.5;
+  return 0.5*Math.log(2*Math.PI)+(z+0.5)*Math.log(t)-t+Math.log(x);}
+function fitParams(vals){const m=mean(vals),s=std(vals);
+  if(ST.fit==='normal')return {pdf:x=>gauss(x,m,s),cdf:x=>normCdf(x,m,s),label:'Normal',txt:`μ=${m.toFixed(2)}, σ=${s.toFixed(2)}`};
+  if(ST.fit==='lognormal'){const lv=vals.filter(v=>v>0).map(Math.log);const lm=mean(lv),ls=std(lv);
+    return {pdf:x=>x>0?gauss(Math.log(x),lm,ls)/x:0,cdf:x=>x>0?normCdf(Math.log(x),lm,ls):0,label:'Lognormal',txt:`μ_log=${lm.toFixed(2)}, σ_log=${ls.toFixed(2)}`};}
+  if(ST.fit==='weibull'){const pos=vals.filter(v=>v>0);const cv=std(pos)/mean(pos);
+    let k=Math.pow(cv,-1.086);const lam=mean(pos)/Math.exp(lgamma(1+1/k));
+    return {pdf:x=>x>0?(k/lam)*Math.pow(x/lam,k-1)*Math.exp(-Math.pow(x/lam,k)):0,cdf:x=>x>0?1-Math.exp(-Math.pow(x/lam,k)):0,label:'Weibull',txt:`k=${k.toFixed(2)}, λ=${lam.toFixed(2)}`};}
+  return null;}
+function ksStat(vals,cdf){const sorted=[...vals].sort((a,b)=>a-b),n=sorted.length;let d=0;
+  for(let i=0;i<n;i++){const f=cdf(sorted[i]);d=Math.max(d,Math.abs((i+1)/n-f),Math.abs(f-i/n));}return d;}
+function countPeaks(curve){let p=0;for(let i=1;i<curve.length-1;i++){if(curve[i]>curve[i-1]&&curve[i]>=curve[i+1]&&curve[i]>0.15*Math.max(...curve))p++;}return p;}
+
+function resize(){W=wrap.clientWidth;H=wrap.clientHeight;for(const c of [plot,overlay]){c.width=W*DPR;c.height=H*DPR;c.getContext('2d').setTransform(DPR,0,0,DPR,0,0);}draw();}
+function niceTicks(lo,hi,n){const span=hi-lo,s0=span/n,mag=Math.pow(10,Math.floor(Math.log10(s0)));const nm=s0/mag;
+  let st=mag*(nm<1.5?1:nm<3?2:nm<7?5:10);const start=Math.ceil(lo/st)*st,out=[];for(let v=start;v<=hi+1e-9;v+=st)out.push(v);return out;}
+function fmt(v){if(Math.abs(v)>=1000)return (v/1000).toFixed(v%1000?1:0)+'k';return Math.abs(v)<1?v.toFixed(2):v.toFixed(Math.abs(v)<100?1:0);}
+let VIEW={x0:0,x1:1,ymax:1};
+function tx(x){return PAD.l+(x-VIEW.x0)/(VIEW.x1-VIEW.x0)*(W-PAD.l-PAD.r);}
+function ty(y){return H-PAD.b-(y/VIEW.ymax)*(H-PAD.t-PAD.b);}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  const gs=groups();const av=allVals();const lo=Math.min(...av),hi=Math.max(...av);
+  const pad=(hi-lo)*0.04||1;VIEW.x0=lo-pad;VIEW.x1=hi+pad;
+  const nbins=binCount(av);
+  // compute hist per group
+  const hists=gs.map(g=>{const h=histogram(g.vals,nbins,VIEW.x0,VIEW.x1);return {g,...h};});
+  // y max
+  let ymax=0;
+  if(ST.ymode==='cdf')ymax=1;
+  else{for(const h of hists){for(let i=0;i<h.counts.length;i++){
+    let val=h.counts[i];if(ST.ymode==='density')val=h.counts[i]/(h.g.vals.length*h.w);if(val>ymax)ymax=val;}}}
+  // include kde/fit peak in density mode
+  const xs=[];for(let i=0;i<=160;i++)xs.push(VIEW.x0+(VIEW.x1-VIEW.x0)*i/160);
+  let kdes=null,fitc=null;
+  if(ST.ymode==='density'||ST.ymode==='count'){
+    if(ST.kde)kdes=gs.map(g=>kdeCurve(g.vals,xs,ST.bw));
+    if(ST.fit!=='none'){const fp=fitParams(av);if(fp)fitc=xs.map(x=>fp.pdf(x));}
+    if(ST.ymode==='density'){if(kdes)kdes.forEach(c=>ymax=Math.max(ymax,...c));if(fitc)ymax=Math.max(ymax,...fitc);}
+  }
+  VIEW.ymax=ymax*1.1||1;
+  // axes
+  ctx.strokeStyle=getCSS('--grid');ctx.fillStyle=getCSS('--text-dim');ctx.lineWidth=1;ctx.font='11px Segoe UI';ctx.textAlign='center';ctx.textBaseline='top';
+  for(const t of niceTicks(VIEW.x0,VIEW.x1,7)){const X=tx(t);if(X<PAD.l-1||X>W-PAD.r+1)continue;
+    ctx.strokeStyle=getCSS('--grid');ctx.beginPath();ctx.moveTo(X,PAD.t);ctx.lineTo(X,H-PAD.b);ctx.stroke();ctx.fillText(fmt(t),X,H-PAD.b+6);}
+  ctx.textAlign='right';ctx.textBaseline='middle';
+  for(const t of niceTicks(0,VIEW.ymax,6)){const Y=ty(t);if(Y<PAD.t-1||Y>H-PAD.b+1)continue;
+    ctx.strokeStyle=getCSS('--grid');ctx.beginPath();ctx.moveTo(PAD.l,Y);ctx.lineTo(W-PAD.r,Y);ctx.stroke();ctx.fillText(fmt(t),PAD.l-8,Y);}
+  ctx.fillStyle=getCSS('--text');ctx.font='12px Segoe UI';ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText(ST.col,PAD.l+(W-PAD.l-PAD.r)/2,H-6);
+  // CDF mode
+  if(ST.ymode==='cdf'){
+    gs.forEach(g=>{const sorted=[...g.vals].sort((a,b)=>a-b),n=sorted.length;ctx.beginPath();
+      for(let i=0;i<n;i++){const X=tx(sorted[i]),Y=ty((i+1)/n);i===0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+      ctx.strokeStyle=g.color;ctx.lineWidth=2;ctx.stroke();});
+  } else {
+    // bars
+    const w=(W-PAD.l-PAD.r)/nbins;
+    hists.forEach((h,gi)=>{const alpha=hists.length>1?0.45:0.85;
+      for(let i=0;i<h.counts.length;i++){let val=h.counts[i];if(ST.ymode==='density')val/= (h.g.vals.length*h.w);
+        const X=PAD.l+i*w,Y=ty(val);ctx.fillStyle=h.g.color;ctx.globalAlpha=alpha;ctx.fillRect(X+0.5,Y,w-1,H-PAD.b-Y);}
+      ctx.globalAlpha=1;});
+    // KDE
+    if(kdes)kdes.forEach((c,gi)=>{ctx.beginPath();for(let i=0;i<xs.length;i++){const X=tx(xs[i]);
+      const yv=ST.ymode==='density'?c[i]:c[i]*gs[gi].vals.length*((VIEW.x1-VIEW.x0)/nbins);const Y=ty(yv);i===0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+      ctx.strokeStyle=gs[gi].color;ctx.lineWidth=2;ctx.setLineDash([]);ctx.stroke();});
+    // fit
+    if(fitc){ctx.beginPath();for(let i=0;i<xs.length;i++){const X=tx(xs[i]);
+      const yv=ST.ymode==='density'?fitc[i]:fitc[i]*av.length*((VIEW.x1-VIEW.x0)/nbins);const Y=ty(yv);i===0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+      ctx.strokeStyle='#ff6b6b';ctx.lineWidth=2;ctx.setLineDash([6,4]);ctx.stroke();ctx.setLineDash([]);}
+  }
+  // mean / sigma markers (only single group)
+  if(ST.meanMark&&gs.length===1){const m=mean(av),s=std(av);
+    [[m,'#fff','μ'],[m-s,'#7f8794','-σ'],[m+s,'#7f8794','+σ']].forEach(([xv,col,lbl])=>{const X=tx(xv);
+      ctx.setLineDash([4,4]);ctx.strokeStyle=col;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(X,PAD.t);ctx.lineTo(X,H-PAD.b);ctx.stroke();ctx.setLineDash([]);
+      ctx.fillStyle=col;ctx.font='10px Segoe UI';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(lbl,X,PAD.t);});}
+  // spec limits
+  [['lsl',ST.lsl,'LSL'],['usl',ST.usl,'USL']].forEach(([k,xv,lbl])=>{if(xv&&xv>VIEW.x0&&xv<VIEW.x1){const X=tx(xv);
+    ctx.setLineDash([8,5]);ctx.strokeStyle=getCSS('--bad');ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(X,PAD.t);ctx.lineTo(X,H-PAD.b);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=getCSS('--bad');ctx.font='11px Segoe UI';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(lbl,X,PAD.t+2);}});
+  // rug
+  if(ST.rug){const yb=H-PAD.b;gs.forEach(g=>{ctx.strokeStyle=g.color;ctx.globalAlpha=0.35;ctx.lineWidth=1;
+    const step=Math.max(1,Math.floor(g.vals.length/400));for(let i=0;i<g.vals.length;i+=step){const X=tx(g.vals[i]);ctx.beginPath();ctx.moveTo(X,yb);ctx.lineTo(X,yb-6);ctx.stroke();}ctx.globalAlpha=1;});}
+  ctx.strokeStyle=getCSS('--border');ctx.strokeRect(PAD.l,PAD.t,W-PAD.l-PAD.r,H-PAD.t-PAD.b);
+  // legend
+  $('legend').innerHTML=gs.map(g=>`<div class="lrow"><span class="swatch" style="background:${g.color}"></span>${g.name} <span style="color:var(--text-dim)">(${g.vals.length})</span></div>`).join('')
+    + (ST.fit!=='none'?`<div class="lrow"><span class="swatch" style="background:#ff6b6b"></span>${ST.fit} fit</div>`:'');
+  buildStats(nbins);buildInsights(nbins);
+}
+function buildStats(nbins){const av=allVals();const sorted=[...av].sort((a,b)=>a-b);
+  const m=mean(av),s=std(av),sk=skew(av),ku=kurt(av);
+  let html=`<div class="stat-group-title">${ST.col} — moments</div><table>
+    <tr><td>n</td><td>${av.length}</td></tr>
+    <tr><td>Mean</td><td>${m.toFixed(3)}</td></tr>
+    <tr><td>Std</td><td>${s.toFixed(3)}</td></tr>
+    <tr><td>Median</td><td>${quantile(sorted,0.5).toFixed(3)}</td></tr>
+    <tr><td>Skewness</td><td>${sk.toFixed(2)} ${Math.abs(sk)>0.8?'<span class="pill warn">skewed</span>':''}</td></tr>
+    <tr><td>Kurtosis</td><td>${ku.toFixed(2)}</td></tr>
+    <tr><td>Bins (${ST.binRule})</td><td>${nbins}</td></tr></table>`;
+  if(ST.fit!=='none'){const fp=fitParams(av);if(fp){const d=ksStat(av,fp.cdf);
+    html+=`<div class="stat-group-title">${fp.label} fit</div><table>
+      <tr><td>Params</td><td>${fp.txt}</td></tr>
+      <tr><td>KS statistic</td><td>${d.toFixed(3)} ${d<0.05?'<span class="pill good">good</span>':d<0.1?'<span class="pill warn">fair</span>':'<span class="pill bad">poor</span>'}</td></tr></table>`;}}
+  if(ST.lsl||ST.usl){const cp=(ST.usl&&ST.lsl)?(ST.usl-ST.lsl)/(6*s):null;
+    const cpu=ST.usl?(ST.usl-m)/(3*s):Infinity,cpl=ST.lsl?(m-ST.lsl)/(3*s):Infinity;const cpk=Math.min(cpu,cpl);
+    const oos=av.filter(v=>(ST.lsl&&v<ST.lsl)||(ST.usl&&v>ST.usl)).length;const ppm=(1e6*oos/av.length).toFixed(0);
+    html+=`<div class="stat-group-title">Process capability</div><table>`;
+    if(cp!=null)html+=`<tr><td>Cp</td><td>${cp.toFixed(2)}</td></tr>`;
+    html+=`<tr><td>Cpk</td><td>${isFinite(cpk)?cpk.toFixed(2):'—'} ${cpk>=1.33?'<span class="pill good">capable</span>':cpk>=1?'<span class="pill warn">marginal</span>':'<span class="pill bad">incapable</span>'}</td></tr>
+      <tr><td>Out-of-spec</td><td>${oos} (${ppm} ppm)</td></tr></table>`;}
+  $('tab-stats').innerHTML=html;
+}
+function buildInsights(nbins){const av=allVals();const out=[];const sk=skew(av);
+  const xs=[];for(let i=0;i<=160;i++)xs.push(VIEW.x0+(VIEW.x1-VIEW.x0)*i/160);
+  const peaks=countPeaks(kdeCurve(av,xs,ST.bw));
+  if(peaks>=2)out.push({i:'📊',c:'warn',t:`Distribution is <b>multimodal — ${peaks} peaks</b> detected. A single mean/std is misleading; the data likely mixes ${peaks} operating regimes.`});
+  else out.push({i:'📊',c:'',t:`Distribution is <b>unimodal</b>. Single-mode summary statistics are valid.`});
+  if(Math.abs(sk)>0.8)out.push({i:'↗️',c:'warn',t:`Strong <b>${sk>0?'right':'left'} skew</b> (skew=${sk.toFixed(1)}). Mean &gt; median — prefer a Lognormal/Weibull fit or a log axis over Normal.`});
+  if(ST.binRule!=='manual')out.push({i:'▥',c:'',t:`Auto bin rule <b>${ST.binRule.toUpperCase()}</b> chose <b>${nbins}</b> bins. FD resists outlier-driven over-smoothing on skewed data.`});
+  if(ST.fit!=='none'){const fp=fitParams(av);if(fp){const d=ksStat(av,fp.cdf);
+    out.push({i:'〽️',c:d<0.05?'':'bad',t:`<b>${fp.label}</b> fit ${d<0.05?'matches well':'does NOT match'} (KS=${d.toFixed(3)}). ${d<0.05?'':'Try another family.'}`});}}
+  if(ST.usl||ST.lsl){const m=mean(av),s=std(av);const cpu=ST.usl?(ST.usl-m)/(3*s):Infinity,cpl=ST.lsl?(m-ST.lsl)/(3*s):Infinity;const cpk=Math.min(cpu,cpl);
+    out.push({i:'🎯',c:cpk>=1.33?'':'bad',t:`Process is <b>${cpk>=1.33?'capable':cpk>=1?'marginal':'incapable'}</b> (Cpk=${isFinite(cpk)?cpk.toFixed(2):'—'}). ${cpk<1.33?'Center the mean or reduce spread to reach Cpk≥1.33.':''}`});}
+  out.push({i:'💡',c:'',t:`Multimodality, skew, fit quality and Cpk are auto-detected here — backed by the proposed C++ <code>mp_cpp::stats</code> core (full-data pass, not the decimated preview).`});
+  $('tab-insights').innerHTML=out.map(o=>`<div class="insight ${o.c}"><span class="ico">${o.i}</span><span class="txt">${o.t}</span></div>`).join('');
+}
+// hover readout
+overlay.addEventListener('mousemove',e=>{const rect=overlay.getBoundingClientRect(),mx=e.clientX-rect.left;
+  if(mx>PAD.l&&mx<W-PAD.r){const xv=VIEW.x0+(mx-PAD.l)/(W-PAD.l-PAD.r)*(VIEW.x1-VIEW.x0);
+    const av=allVals();const nbins=binCount(av);const w=(VIEW.x1-VIEW.x0)/nbins;const h=histogram(av,nbins,VIEW.x0,VIEW.x1);
+    const bi=Math.min(nbins-1,Math.max(0,Math.floor((xv-VIEW.x0)/w)));
+    readout.innerHTML=`Value: <b>${fmt(xv)}</b> &nbsp; Bin count: <b>${h.counts[bi]}</b>`;}});
+// rail/drawer
+function selectPanel(name){if(ST.drawerOpen&&ST.panel===name){ST.drawerOpen=false;$('drawer').classList.add('collapsed');
+    $('rail').querySelectorAll('button').forEach(b=>b.classList.remove('active'));setTimeout(resize,140);return;}
+  ST.panel=name;ST.drawerOpen=true;$('drawer').classList.remove('collapsed');
+  $('rail').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.panel===name));
+  $('drawer').querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.dataset.panel===name));
+  const titles={channels:'Channels',binning:'Binning',curves:'Curves & Fit',capability:'Capability',display:'Display'};
+  $('drawerTitle').textContent=titles[name];setTimeout(resize,140);}
+$('rail').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>selectPanel(b.dataset.panel)));
+$('drawerX').addEventListener('click',()=>{ST.drawerOpen=false;$('drawer').classList.add('collapsed');$('rail').querySelectorAll('button').forEach(b=>b.classList.remove('active'));setTimeout(resize,140);});
+function buildChannels(){$('chanList').innerHTML=CHANNELS.map(c=>`<div class="chan ${c===ST.col?'sel':''}" data-col="${c}">
+  <span class="swatch"></span><span class="name">${c}</span>${c===ST.col?'<span class="tag">▶ shown</span>':''}</div>`).join('');
+  $('chanList').querySelectorAll('.chan').forEach(el=>el.addEventListener('click',()=>{ST.col=el.dataset.col;buildChannels();draw();}));}
+// bindings
+function bindSel(id,key,after){const el=$(id);el.value=ST[key];el.addEventListener('change',()=>{ST[key]=el.value;after&&after();draw();});}
+bindSel('groupBy','groupBy');bindSel('binRule','binRule');bindSel('fit','fit');bindSel('ymode','ymode');bindSel('barColor','barColor');
+$('bins').addEventListener('input',e=>{ST.bins=+e.target.value;$('binsV').textContent=e.target.value;if(ST.binRule==='manual')draw();});
+$('bw').addEventListener('input',e=>{ST.bw=e.target.value/100;$('bwV').textContent=ST.bw.toFixed(1);draw();});
+$('lsl').addEventListener('input',e=>{ST.lsl=+e.target.value;draw();});
+$('usl').addEventListener('input',e=>{ST.usl=+e.target.value;draw();});
+for(const [id,key] of [['kde','kde'],['rug','rug'],['meanMark','meanMark']])$(id).addEventListener('change',e=>{ST[key]=e.target.checked;draw();});
+$('btnReset').addEventListener('click',draw);
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');
+  for(const n of ['stats','insights'])$('tab-'+n).style.display=(n===t.dataset.tab)?'block':'none';}));
+buildChannels();new ResizeObserver(resize).observe(wrap);resize();
+</script>
+</body>
+</html>
