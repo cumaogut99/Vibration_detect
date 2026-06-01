@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MachinePulseAI — Line / Time Graph (Design Mockup)</title>
+<style>
+  :root{--bg:#1b1e24;--panel:#23272f;--panel-2:#2b303a;--rail:#1d2128;--border:#353b46;
+    --text:#d7dce3;--text-dim:#8b93a1;--accent:#4ea1ff;--accent-2:#ffb454;--good:#4ec97a;--bad:#ff6b6b;--grid:#2e333d;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:"Segoe UI",Roboto,system-ui,sans-serif;font-size:13px;overflow:hidden;}
+  .app{display:flex;flex-direction:column;height:100vh;}
+  .toolbar{display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--panel);border-bottom:1px solid var(--border);}
+  .toolbar .title{font-weight:600;font-size:14px;} .toolbar .title .badge{font-size:10px;color:var(--text-dim);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:8px;font-weight:400;}
+  .spacer{flex:1;} .tbtn{background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:5px;cursor:pointer;font-size:12px;}
+  .tbtn:hover{border-color:var(--accent);} .tbtn.active{background:var(--accent);color:#0c0f14;border-color:var(--accent);}
+  .body{display:flex;flex:1;min-height:0;}
+  .rail{width:56px;background:var(--rail);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding-top:6px;gap:2px;}
+  .rail button{width:48px;height:50px;background:transparent;border:none;color:var(--text-dim);cursor:pointer;border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:9.5px;}
+  .rail button .ico{font-size:18px;line-height:1;} .rail button:hover{background:var(--panel-2);color:var(--text);}
+  .rail button.active{background:var(--panel);color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);}
+  .drawer{width:260px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;transition:width .12s ease;flex-shrink:0;}
+  .drawer.collapsed{width:0;border-right:none;overflow:hidden;}
+  .drawer-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);}
+  .drawer-head .x{cursor:pointer;font-size:15px;} .drawer-head .x:hover{color:var(--text);}
+  .panel{display:none;} .panel.active{display:block;}
+  .section{padding:10px 12px;border-bottom:1px solid var(--grid);}
+  .row{display:flex;align-items:center;justify-content:space-between;margin:6px 0;gap:8px;} .row label{color:var(--text-dim);font-size:12px;}
+  select,input[type="number"]{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:12px;max-width:120px;}
+  input[type="range"]{width:116px;accent-color:var(--accent);} input[type="checkbox"]{accent-color:var(--accent);}
+  .val{color:var(--text);font-variant-numeric:tabular-nums;min-width:34px;text-align:right;} .hintnote{color:var(--text-dim);font-size:11px;line-height:1.4;}
+  .chan{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--grid);cursor:pointer;} .chan:hover{background:var(--panel-2);}
+  .chan .swatch{width:11px;height:11px;border-radius:3px;flex-shrink:0;} .chan .name{flex:1;} .chan input{margin:0;}
+  .grp-title{padding:9px 12px 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);font-weight:600;}
+  .pane-center{flex:1;min-width:0;position:relative;display:flex;flex-direction:column;}
+  .plot-wrap{flex:1;position:relative;min-height:0;} canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  #overlay{cursor:crosshair;}
+  .readout{position:absolute;left:12px;bottom:10px;background:rgba(20,23,28,.85);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text-dim);font-variant-numeric:tabular-nums;pointer-events:none;} .readout b{color:var(--text);}
+  .legend{position:absolute;right:12px;top:10px;background:rgba(20,23,28,.7);border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:12px;pointer-events:none;}
+  .legend .lrow{display:flex;align-items:center;gap:7px;margin:2px 0;} .legend .swatch{width:12px;height:12px;border-radius:3px;}
+  .cband{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(78,161,255,.12);border:1px solid var(--accent);color:var(--accent);border-radius:14px;padding:4px 12px;font-size:11.5px;pointer-events:none;display:none;}
+  .pane-right{width:300px;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;}
+  .tabs{display:flex;border-bottom:1px solid var(--border);} .tab{flex:1;text-align:center;padding:8px 4px;cursor:pointer;font-size:12px;color:var(--text-dim);border-bottom:2px solid transparent;} .tab.active{color:var(--text);border-bottom-color:var(--accent);}
+  .tab-body{flex:1;overflow-y:auto;padding:4px 0;}
+  table{width:100%;border-collapse:collapse;font-size:12px;} th,td{text-align:right;padding:5px 12px;border-bottom:1px solid var(--grid);} th:first-child,td:first-child{text-align:left;color:var(--text-dim);} td{font-variant-numeric:tabular-nums;}
+  .stat-group-title{padding:9px 12px 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);font-weight:600;}
+  .pill{font-size:11px;padding:1px 7px;border-radius:10px;} .pill.good{background:rgba(78,201,122,.15);color:var(--good);} .pill.warn{background:rgba(255,180,84,.15);color:var(--accent-2);} .pill.bad{background:rgba(255,107,107,.15);color:var(--bad);}
+  .insight{display:flex;gap:9px;padding:10px 12px;border-bottom:1px solid var(--grid);line-height:1.45;} .insight .ico{font-size:15px;flex-shrink:0;} .insight .txt b{color:#fff;} .insight.warn{background:rgba(255,180,84,.05);} .insight.bad{background:rgba(255,107,107,.06);}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar">
+    <span class="title">Time Graph <span class="badge">Trend · Cursors · Anomaly · Design Mockup</span></span>
+    <span class="spacer"></span>
+    <button class="tbtn" id="btnCursor">⊹ Dual Cursors</button>
+    <button class="tbtn" id="btnReset">Reset View</button><button class="tbtn">⤓ Export</button>
+  </div>
+  <div class="body">
+    <div class="rail" id="rail">
+      <button data-panel="channels" class="active"><span class="ico">📑</span>Channels</button>
+      <button data-panel="cursors"><span class="ico">⊹</span>Cursors</button>
+      <button data-panel="analysis"><span class="ico">🩺</span>Analyse</button>
+      <button data-panel="markers"><span class="ico">⚑</span>Events</button>
+      <button data-panel="axes"><span class="ico">📐</span>Axes</button>
+    </div>
+    <div class="drawer" id="drawer">
+      <div class="drawer-head"><span id="drawerTitle">Channels</span><span class="x" id="drawerX">✕</span></div>
+      <div class="panel active" data-panel="channels">
+        <div class="grp-title">Signals — toggle visibility</div><div id="chanList"></div>
+      </div>
+      <div class="panel" data-panel="cursors">
+        <div class="section">
+          <div class="row"><label>Mode</label>
+            <select id="curMode"><option value="off">Off</option><option value="single">Single</option><option value="dual" selected>Dual (range)</option></select></div>
+          <div class="row"><label>Snap to data</label><input type="checkbox" id="snap" checked></div>
+          <div class="row"><label>Stats between cursors</label><input type="checkbox" id="rangeStats" checked></div>
+          <div class="hintnote">Dual cursors give Δt, Δy and RMS/mean over the selected window — drag cursors on the plot.</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="analysis">
+        <div class="section">
+          <div class="row"><label>Anomaly band (μ±kσ)</label><input type="checkbox" id="anom" checked></div>
+          <div class="row"><label>Window</label><input type="range" id="win" min="20" max="300" value="120"><span class="val" id="winV">120</span></div>
+          <div class="row"><label>k (sigma)</label><input type="range" id="ksig" min="15" max="50" value="30"><span class="val" id="ksigV">3.0</span></div>
+          <div class="row"><label>EWMA overlay</label><input type="checkbox" id="ewma"></div>
+          <div class="row"><label>EWMA α</label><input type="range" id="alpha" min="2" max="40" value="10"><span class="val" id="alphaV">0.10</span></div>
+          <div class="hintnote">Rolling μ±kσ band flags out-of-band points (red). EWMA tracks slow drift. Datadog/Grafana-style anomaly detection.</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="markers">
+        <div class="section">
+          <div class="row"><label>Threshold marker</label><input type="number" id="thr" value="0" step="0.1" style="max-width:80px"></div>
+          <div class="row"><label>Auto-annotate crossings</label><input type="checkbox" id="annot" checked></div>
+          <div class="hintnote">When the active signal crosses the threshold, drop an event flag (⚑) automatically.</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="axes">
+        <div class="section">
+          <div class="row"><label>Y autoscale</label><input type="checkbox" id="autoY" checked></div>
+          <div class="row"><label>Grid</label><input type="checkbox" id="grid" checked></div>
+          <div class="hintnote">Mouse wheel = zoom X · drag = pan (mock). Double-click resets.</div>
+        </div>
+      </div>
+    </div>
+    <div class="pane-center"><div class="plot-wrap" id="plotWrap">
+      <canvas id="plot"></canvas><canvas id="overlay"></canvas>
+      <div class="legend" id="legend"></div>
+      <div class="readout" id="readout">t: — &nbsp; value: —</div>
+      <div class="cband" id="cband"></div>
+    </div></div>
+    <div class="pane-right">
+      <div class="tabs"><div class="tab active" data-tab="stats">Statistics</div><div class="tab" data-tab="insights">Insights</div></div>
+      <div class="tab-body" id="tab-stats"></div><div class="tab-body" id="tab-insights" style="display:none"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* MachinePulseAI — Time Graph mockup. Synthetic data, no backend.
+   Multi-signal lines, single/dual cursors with Δ + range RMS/mean, rolling μ±kσ anomaly band
+   with out-of-band flagging, EWMA drift overlay, threshold event markers, per-signal statistics. */
+const SIGNALS=[
+  {key:'vib',name:'Vibration RMS',color:'#4ea1ff',visible:true},
+  {key:'temp',name:'Temperature',color:'#ffb454',visible:true},
+  {key:'rpm',name:'Shaft RPM',color:'#4ec97a',visible:false},
+];
+const N=2000;const T=[],SER={vib:[],temp:[],rpm:[]};
+function randn(){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+for(let i=0;i<N;i++){const t=i*0.05;T.push(t);
+  // vibration: baseline + slow ramp + a fault burst around i=1200..1320 + noise
+  let vib=2.0+0.0006*i+0.4*Math.sin(i*0.03)+0.25*randn();
+  if(i>1200&&i<1320)vib+=2.5*Math.exp(-((i-1260)**2)/1500);
+  if(Math.random()<0.004)vib+=2.2*Math.random();           // sparse spikes
+  SER.vib.push(Math.max(0.1,vib));
+  SER.temp.push(55+8*Math.sin(i*0.004)+0.0015*i+0.6*randn());
+  SER.rpm.push(1500+300*Math.sin(i*0.01)+20*randn());}
+const ST={curMode:'dual',snap:true,rangeStats:true,anom:true,win:120,ksig:3.0,ewma:false,alpha:0.10,
+  thr:0,annot:true,autoY:true,grid:true,panel:'channels',drawerOpen:true,
+  cursors:[T[Math.floor(N*0.35)],T[Math.floor(N*0.62)]],dragging:null,view:null};
+const $=id=>document.getElementById(id);
+const plot=$('plot'),overlay=$('overlay'),ctx=plot.getContext('2d'),octx=overlay.getContext('2d');
+const wrap=$('plotWrap'),readout=$('readout'),cband=$('cband');
+let PAD={l:60,r:18,t:18,b:42},W=0,H=0,DPR=window.devicePixelRatio||1;
+const getCSS=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const mean=a=>a.reduce((s,v)=>s+v,0)/a.length;
+const std=a=>{const m=mean(a);return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/(a.length-1||1));};
+const rms=a=>Math.sqrt(a.reduce((s,v)=>s+v*v,0)/a.length);
+function activeSig(){return SIGNALS.find(s=>s.visible)||SIGNALS[0];}
+function visSignals(){return SIGNALS.filter(s=>s.visible);}
+let VIEW={t0:T[0],t1:T[N-1],y0:0,y1:1};
+function tx(t){return PAD.l+(t-VIEW.t0)/(VIEW.t1-VIEW.t0)*(W-PAD.l-PAD.r);}
+function ty(y){return H-PAD.b-(y-VIEW.y0)/(VIEW.y1-VIEW.y0)*(H-PAD.t-PAD.b);}
+function idxAt(t){let i=Math.round((t-T[0])/(T[1]-T[0]));return Math.max(0,Math.min(N-1,i));}
+function rolling(arr,win){const out={m:[],s:[]};let q=[];let sum=0,sum2=0;
+  for(let i=0;i<arr.length;i++){q.push(arr[i]);sum+=arr[i];sum2+=arr[i]*arr[i];if(q.length>win){const o=q.shift();sum-=o;sum2-=o*o;}
+    const m=sum/q.length;out.m.push(m);out.s.push(Math.sqrt(Math.max(0,sum2/q.length-m*m)));}return out;}
+function ewma(arr,a){const out=[arr[0]];for(let i=1;i<arr.length;i++)out.push(a*arr[i]+(1-a)*out[i-1]);return out;}
+function resize(){W=wrap.clientWidth;H=wrap.clientHeight;for(const c of [plot,overlay]){c.width=W*DPR;c.height=H*DPR;c.getContext('2d').setTransform(DPR,0,0,DPR,0,0);}draw();drawOverlay();}
+function niceTicks(lo,hi,n){const span=hi-lo,s0=span/n,mag=Math.pow(10,Math.floor(Math.log10(s0)));const nm=s0/mag;let st=mag*(nm<1.5?1:nm<3?2:nm<7?5:10);const start=Math.ceil(lo/st)*st,out=[];for(let v=start;v<=hi+1e-9;v+=st)out.push(v);return out;}
+function fmt(v){return Math.abs(v)<1?v.toFixed(2):v.toFixed(Math.abs(v)<100?1:0);}
+function computeYRange(){if(!ST.autoY&&VIEW._lockY)return;let lo=Infinity,hi=-Infinity;
+  const i0=idxAt(VIEW.t0),i1=idxAt(VIEW.t1);
+  for(const s of visSignals())for(let i=i0;i<=i1;i++){const v=SER[s.key][i];if(v<lo)lo=v;if(v>hi)hi=v;}
+  const pad=(hi-lo)*0.08||1;VIEW.y0=lo-pad;VIEW.y1=hi+pad;}
+function draw(){
+  ctx.clearRect(0,0,W,H);computeYRange();
+  // grid
+  if(ST.grid){ctx.strokeStyle=getCSS('--grid');ctx.fillStyle=getCSS('--text-dim');ctx.font='11px Segoe UI';ctx.lineWidth=1;ctx.textAlign='center';ctx.textBaseline='top';
+    for(const t of niceTicks(VIEW.t0,VIEW.t1,8)){const X=tx(t);if(X<PAD.l-1||X>W-PAD.r+1)continue;ctx.beginPath();ctx.moveTo(X,PAD.t);ctx.lineTo(X,H-PAD.b);ctx.stroke();ctx.fillText(t.toFixed(1)+'s',X,H-PAD.b+5);}
+    ctx.textAlign='right';ctx.textBaseline='middle';
+    for(const y of niceTicks(VIEW.y0,VIEW.y1,6)){const Y=ty(y);if(Y<PAD.t-1||Y>H-PAD.b+1)continue;ctx.beginPath();ctx.moveTo(PAD.l,Y);ctx.lineTo(W-PAD.r,Y);ctx.stroke();ctx.fillText(fmt(y),PAD.l-8,Y);}}
+  // anomaly band for active signal
+  const act=activeSig();const arr=SER[act.key];
+  if(ST.anom){const rl=rolling(arr,ST.win);ctx.beginPath();const i0=idxAt(VIEW.t0),i1=idxAt(VIEW.t1);
+    for(let i=i0;i<=i1;i++){const X=tx(T[i]),Y=ty(rl.m[i]+ST.ksig*rl.s[i]);i===i0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+    for(let i=i1;i>=i0;i--){const X=tx(T[i]),Y=ty(rl.m[i]-ST.ksig*rl.s[i]);ctx.lineTo(X,Y);}
+    ctx.closePath();ctx.fillStyle=act.color;ctx.globalAlpha=0.10;ctx.fill();ctx.globalAlpha=1;
+    // band center
+    ctx.beginPath();for(let i=i0;i<=i1;i++){const X=tx(T[i]),Y=ty(rl.m[i]);i===i0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+    ctx.strokeStyle=act.color;ctx.globalAlpha=0.4;ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=1;
+    VIEW._roll=rl;}
+  // lines
+  for(const s of visSignals()){const a=SER[s.key];ctx.beginPath();const i0=idxAt(VIEW.t0),i1=idxAt(VIEW.t1);
+    const step=Math.max(1,Math.floor((i1-i0)/(W*1.5)));
+    for(let i=i0;i<=i1;i+=step){const X=tx(T[i]),Y=ty(a[i]);i===i0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+    ctx.strokeStyle=s.color;ctx.lineWidth=1.4;ctx.stroke();}
+  // EWMA
+  if(ST.ewma){const ew=ewma(arr,ST.alpha);ctx.beginPath();const i0=idxAt(VIEW.t0),i1=idxAt(VIEW.t1);
+    for(let i=i0;i<=i1;i++){const X=tx(T[i]),Y=ty(ew[i]);i===i0?ctx.moveTo(X,Y):ctx.lineTo(X,Y);}
+    ctx.strokeStyle='#fff';ctx.lineWidth=1.6;ctx.setLineDash([6,3]);ctx.stroke();ctx.setLineDash([]);}
+  // anomaly out-of-band markers
+  if(ST.anom&&VIEW._roll){const rl=VIEW._roll;const i0=idxAt(VIEW.t0),i1=idxAt(VIEW.t1);let cnt=0;
+    for(let i=i0;i<=i1;i++){if(Math.abs(arr[i]-rl.m[i])>ST.ksig*rl.s[i]){ctx.beginPath();ctx.arc(tx(T[i]),ty(arr[i]),3,0,2*Math.PI);ctx.fillStyle=getCSS('--bad');ctx.fill();cnt++;}}
+    VIEW._anomCount=cnt;}
+  // threshold
+  if(ST.thr&&ST.thr>VIEW.y0&&ST.thr<VIEW.y1){const Y=ty(ST.thr);ctx.setLineDash([8,5]);ctx.strokeStyle=getCSS('--accent-2');ctx.lineWidth=1.3;
+    ctx.beginPath();ctx.moveTo(PAD.l,Y);ctx.lineTo(W-PAD.r,Y);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=getCSS('--accent-2');ctx.font='11px Segoe UI';ctx.textAlign='left';ctx.textBaseline='bottom';ctx.fillText('threshold '+ST.thr,PAD.l+4,Y-2);
+    // crossing flags
+    if(ST.annot){const i0=idxAt(VIEW.t0),i1=idxAt(VIEW.t1);let prev=arr[i0];
+      for(let i=i0+1;i<=i1;i++){if((prev<ST.thr&&arr[i]>=ST.thr)){const X=tx(T[i]);ctx.fillStyle=getCSS('--accent-2');ctx.beginPath();ctx.moveTo(X,PAD.t);ctx.lineTo(X+8,PAD.t+5);ctx.lineTo(X,PAD.t+10);ctx.closePath();ctx.fill();}prev=arr[i];}}}
+  ctx.strokeStyle=getCSS('--border');ctx.strokeRect(PAD.l,PAD.t,W-PAD.l-PAD.r,H-PAD.t-PAD.b);
+  $('legend').innerHTML=visSignals().map(s=>`<div class="lrow"><span class="swatch" style="background:${s.color}"></span>${s.name}</div>`).join('')
+    +(ST.ewma?`<div class="lrow"><span class="swatch" style="background:#fff"></span>EWMA(${activeSig().name})</div>`:'');
+  buildStats();buildInsights();
+}
+function drawOverlay(){octx.clearRect(0,0,W,H);if(ST.curMode==='off')return;
+  const cs=ST.curMode==='dual'?ST.cursors:[ST.cursors[0]];
+  cs.forEach((t,i)=>{const X=tx(t);octx.strokeStyle=i===0?getCSS('--accent'):getCSS('--accent-2');octx.lineWidth=1.5;
+    octx.beginPath();octx.moveTo(X,PAD.t);octx.lineTo(X,H-PAD.b);octx.stroke();
+    octx.fillStyle=octx.strokeStyle;octx.beginPath();octx.moveTo(X-5,PAD.t);octx.lineTo(X+5,PAD.t);octx.lineTo(X,PAD.t+7);octx.closePath();octx.fill();});
+  if(ST.curMode==='dual'){const x1=tx(ST.cursors[0]),x2=tx(ST.cursors[1]);
+    octx.fillStyle='rgba(78,161,255,.07)';octx.fillRect(Math.min(x1,x2),PAD.t,Math.abs(x2-x1),H-PAD.t-PAD.b);
+    // range band info
+    const act=activeSig();const i0=idxAt(Math.min(...ST.cursors)),i1=idxAt(Math.max(...ST.cursors));
+    const seg=SER[act.key].slice(i0,i1+1);
+    cband.style.display='block';
+    cband.innerHTML=`Δt=${Math.abs(ST.cursors[1]-ST.cursors[0]).toFixed(2)}s · ${act.name}: RMS=${rms(seg).toFixed(3)} · mean=${mean(seg).toFixed(3)} · pk-pk=${(Math.max(...seg)-Math.min(...seg)).toFixed(3)}`;}
+  else cband.style.display='none';
+}
+function buildStats(){const act=activeSig();let html=`<div class="stat-group-title">Per-signal (full view)</div>
+  <table><tr><th>Signal</th><th>Mean</th><th>RMS</th><th>Std</th></tr>`;
+  for(const s of visSignals()){const a=SER[s.key];html+=`<tr><td style="color:${s.color}">${s.name}</td><td>${mean(a).toFixed(2)}</td><td>${rms(a).toFixed(2)}</td><td>${std(a).toFixed(2)}</td></tr>`;}
+  html+=`</table>`;
+  if(ST.curMode==='dual'&&ST.rangeStats){const i0=idxAt(Math.min(...ST.cursors)),i1=idxAt(Math.max(...ST.cursors));const seg=SER[act.key].slice(i0,i1+1);
+    html+=`<div class="stat-group-title">Between cursors — ${act.name}</div><table>
+      <tr><td>Δt</td><td>${Math.abs(ST.cursors[1]-ST.cursors[0]).toFixed(3)} s</td></tr>
+      <tr><td>RMS</td><td>${rms(seg).toFixed(3)}</td></tr>
+      <tr><td>Mean</td><td>${mean(seg).toFixed(3)}</td></tr>
+      <tr><td>Std</td><td>${std(seg).toFixed(3)}</td></tr>
+      <tr><td>Pk-Pk</td><td>${(Math.max(...seg)-Math.min(...seg)).toFixed(3)}</td></tr>
+      <tr><td>n</td><td>${seg.length}</td></tr></table>`;}
+  if(ST.anom&&VIEW._anomCount!==undefined)html+=`<div class="stat-group-title">Anomaly band</div><table>
+    <tr><td>Out-of-band</td><td>${VIEW._anomCount} ${VIEW._anomCount>0?'<span class="pill bad">flagged</span>':'<span class="pill good">clean</span>'}</td></tr>
+    <tr><td>Window / k</td><td>${ST.win} / ${ST.ksig.toFixed(1)}σ</td></tr></table>`;
+  $('tab-stats').innerHTML=html;
+}
+function buildInsights(){const out=[];const act=activeSig();const a=SER[act.key];
+  // trend
+  const half=Math.floor(a.length/2);const slopeUp=mean(a.slice(half))-mean(a.slice(0,half));
+  out.push({i:slopeUp>0.1?'📈':slopeUp<-0.1?'📉':'➡️',c:Math.abs(slopeUp)>0.3?'warn':'',t:`<b>${act.name}</b> ${slopeUp>0.1?'is trending up':slopeUp<-0.1?'is trending down':'is stationary'} (Δmean ${slopeUp>0?'+':''}${slopeUp.toFixed(2)} over the record).`});
+  if(ST.anom&&VIEW._anomCount){out.push({i:'⚠️',c:'bad',t:`<b>${VIEW._anomCount}</b> samples breach the μ±${ST.ksig.toFixed(1)}σ band (red dots). Largest cluster ≈ a transient burst around <b>t≈63s</b> — consistent with a developing fault.`});}
+  else if(ST.anom)out.push({i:'✅',c:'',t:`No samples breach the rolling μ±${ST.ksig.toFixed(1)}σ band — signal is in control.`});
+  if(ST.curMode==='dual'){const i0=idxAt(Math.min(...ST.cursors)),i1=idxAt(Math.max(...ST.cursors));const seg=a.slice(i0,i1+1);
+    out.push({i:'⊹',c:'',t:`Cursor window RMS for <b>${act.name}</b> is <b>${rms(seg).toFixed(2)}</b>. Move cursors to compare windows; in the real widget this also feeds an FFT/PSD mini-panel.`});}
+  if(ST.thr)out.push({i:'⚑',c:'',t:`Threshold ${ST.thr} crossings are auto-flagged (⚑). Each flag becomes an event annotation persisted with the session.`});
+  out.push({i:'💡',c:'',t:`Rolling band, EWMA and crossing detection run in C++ over mmap (windowed) — this is a Track-2 analyse output, not a decimated-preview calculation.`});
+  $('tab-insights').innerHTML=out.map(o=>`<div class="insight ${o.c}"><span class="ico">${o.i}</span><span class="txt">${o.t}</span></div>`).join('');
+}
+// cursor drag
+overlay.addEventListener('mousedown',e=>{if(ST.curMode==='off')return;const rect=overlay.getBoundingClientRect();const mx=e.clientX-rect.left;
+  const cs=ST.curMode==='dual'?ST.cursors:[ST.cursors[0]];let best=-1,bd=12;cs.forEach((t,i)=>{const d=Math.abs(tx(t)-mx);if(d<bd){bd=d;best=i;}});
+  if(best>=0)ST.dragging=best;});
+window.addEventListener('mousemove',e=>{const rect=overlay.getBoundingClientRect();const mx=e.clientX-rect.left;
+  if(mx>=PAD.l&&mx<=W-PAD.r){const t=VIEW.t0+(mx-PAD.l)/(W-PAD.l-PAD.r)*(VIEW.t1-VIEW.t0);const idx=idxAt(t);
+    readout.innerHTML=`t: <b>${t.toFixed(2)}s</b> &nbsp; ${activeSig().name}: <b>${SER[activeSig().key][idx].toFixed(3)}</b>`;}
+  if(ST.dragging!==null){let t=VIEW.t0+(mx-PAD.l)/(W-PAD.l-PAD.r)*(VIEW.t1-VIEW.t0);t=Math.max(VIEW.t0,Math.min(VIEW.t1,t));
+    if(ST.snap)t=T[idxAt(t)];ST.cursors[ST.dragging]=t;drawOverlay();buildStats();buildInsights();}});
+window.addEventListener('mouseup',()=>{ST.dragging=null;});
+overlay.addEventListener('wheel',e=>{e.preventDefault();const rect=overlay.getBoundingClientRect();const mx=e.clientX-rect.left;
+  const t=VIEW.t0+(mx-PAD.l)/(W-PAD.l-PAD.r)*(VIEW.t1-VIEW.t0);const f=e.deltaY>0?1.15:0.87;
+  VIEW.t0=t-(t-VIEW.t0)*f;VIEW.t1=t+(VIEW.t1-t)*f;VIEW.t0=Math.max(T[0],VIEW.t0);VIEW.t1=Math.min(T[N-1],VIEW.t1);draw();drawOverlay();},{passive:false});
+overlay.addEventListener('dblclick',()=>{VIEW.t0=T[0];VIEW.t1=T[N-1];draw();drawOverlay();});
+// rail/drawer
+function selectPanel(name){if(ST.drawerOpen&&ST.panel===name){ST.drawerOpen=false;$('drawer').classList.add('collapsed');$('rail').querySelectorAll('button').forEach(b=>b.classList.remove('active'));setTimeout(resize,140);return;}
+  ST.panel=name;ST.drawerOpen=true;$('drawer').classList.remove('collapsed');
+  $('rail').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.panel===name));
+  $('drawer').querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.dataset.panel===name));
+  const titles={channels:'Channels',cursors:'Cursors',analysis:'Analyse',markers:'Events',axes:'Axes'};$('drawerTitle').textContent=titles[name];setTimeout(resize,140);}
+$('rail').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>selectPanel(b.dataset.panel)));
+$('drawerX').addEventListener('click',()=>{ST.drawerOpen=false;$('drawer').classList.add('collapsed');$('rail').querySelectorAll('button').forEach(b=>b.classList.remove('active'));setTimeout(resize,140);});
+function buildChannels(){$('chanList').innerHTML=SIGNALS.map((s,i)=>`<label class="chan"><span class="swatch" style="background:${s.color}"></span>
+  <span class="name">${s.name}</span><input type="checkbox" data-i="${i}" ${s.visible?'checked':''}></label>`).join('');
+  $('chanList').querySelectorAll('input').forEach(el=>el.addEventListener('change',()=>{SIGNALS[+el.dataset.i].visible=el.checked;draw();}));}
+function bindSel(id,key,after){const el=$(id);el.value=ST[key];el.addEventListener('change',()=>{ST[key]=el.value;after&&after();draw();drawOverlay();});}
+bindSel('curMode','curMode');
+$('win').addEventListener('input',e=>{ST.win=+e.target.value;$('winV').textContent=e.target.value;draw();});
+$('ksig').addEventListener('input',e=>{ST.ksig=e.target.value/10;$('ksigV').textContent=ST.ksig.toFixed(1);draw();});
+$('alpha').addEventListener('input',e=>{ST.alpha=e.target.value/100;$('alphaV').textContent=ST.alpha.toFixed(2);draw();});
+$('thr').addEventListener('input',e=>{ST.thr=+e.target.value;draw();});
+for(const [id,key] of [['snap','snap'],['rangeStats','rangeStats'],['anom','anom'],['ewma','ewma'],['annot','annot'],['autoY','autoY'],['grid','grid']])
+  $(id).addEventListener('change',e=>{ST[key]=e.target.checked;draw();drawOverlay();});
+$('btnCursor').addEventListener('click',()=>{ST.curMode=ST.curMode==='dual'?'off':'dual';$('curMode').value=ST.curMode;$('btnCursor').classList.toggle('active',ST.curMode==='dual');draw();drawOverlay();});
+$('btnReset').addEventListener('click',()=>{VIEW.t0=T[0];VIEW.t1=T[N-1];draw();drawOverlay();});
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');for(const n of ['stats','insights'])$('tab-'+n).style.display=(n===t.dataset.tab)?'block':'none';}));
+buildChannels();$('btnCursor').classList.add('active');new ResizeObserver(resize).observe(wrap);resize();drawOverlay();
+</script>
+</body>
+</html>
