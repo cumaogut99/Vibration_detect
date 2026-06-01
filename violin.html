@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MachinePulseAI — Violin Plot (Design Mockup)</title>
+<style>
+  :root{--bg:#1b1e24;--panel:#23272f;--panel-2:#2b303a;--rail:#1d2128;--border:#353b46;
+    --text:#d7dce3;--text-dim:#8b93a1;--accent:#4ea1ff;--accent-2:#ffb454;--good:#4ec97a;--bad:#ff6b6b;--grid:#2e333d;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:"Segoe UI",Roboto,system-ui,sans-serif;font-size:13px;overflow:hidden;}
+  .app{display:flex;flex-direction:column;height:100vh;}
+  .toolbar{display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--panel);border-bottom:1px solid var(--border);}
+  .toolbar .title{font-weight:600;font-size:14px;} .toolbar .title .badge{font-size:10px;color:var(--text-dim);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin-left:8px;font-weight:400;}
+  .spacer{flex:1;} .tbtn{background:var(--panel-2);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:5px;cursor:pointer;font-size:12px;}
+  .tbtn:hover{border-color:var(--accent);} .tbtn.active{background:var(--accent);color:#0c0f14;border-color:var(--accent);}
+  .body{display:flex;flex:1;min-height:0;}
+  .rail{width:56px;background:var(--rail);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding-top:6px;gap:2px;}
+  .rail button{width:48px;height:50px;background:transparent;border:none;color:var(--text-dim);cursor:pointer;border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:9.5px;}
+  .rail button .ico{font-size:18px;line-height:1;} .rail button:hover{background:var(--panel-2);color:var(--text);}
+  .rail button.active{background:var(--panel);color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);}
+  .drawer{width:256px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;transition:width .12s ease;flex-shrink:0;}
+  .drawer.collapsed{width:0;border-right:none;overflow:hidden;}
+  .drawer-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);}
+  .drawer-head .x{cursor:pointer;font-size:15px;} .drawer-head .x:hover{color:var(--text);}
+  .panel{display:none;} .panel.active{display:block;}
+  .section{padding:10px 12px;border-bottom:1px solid var(--grid);}
+  .row{display:flex;align-items:center;justify-content:space-between;margin:6px 0;gap:8px;} .row label{color:var(--text-dim);font-size:12px;}
+  select,input[type="number"]{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:12px;max-width:132px;}
+  input[type="range"]{width:118px;accent-color:var(--accent);} input[type="checkbox"]{accent-color:var(--accent);}
+  .val{color:var(--text);font-variant-numeric:tabular-nums;min-width:34px;text-align:right;} .hintnote{color:var(--text-dim);font-size:11px;line-height:1.4;}
+  .chan{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--grid);cursor:pointer;} .chan:hover{background:var(--panel-2);} .chan.sel{background:rgba(78,161,255,.1);}
+  .chan .swatch{width:11px;height:11px;border-radius:3px;flex-shrink:0;background:#3a4150;} .chan .name{flex:1;} .chan .tag{color:var(--accent);font-size:11px;font-weight:600;}
+  .grp-title{padding:9px 12px 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);font-weight:600;}
+  .pane-center{flex:1;min-width:0;position:relative;display:flex;flex-direction:column;}
+  .plot-wrap{flex:1;position:relative;min-height:0;} canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  .readout{position:absolute;left:12px;bottom:10px;background:rgba(20,23,28,.85);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text-dim);font-variant-numeric:tabular-nums;pointer-events:none;} .readout b{color:var(--text);}
+  .pane-right{width:300px;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;}
+  .tabs{display:flex;border-bottom:1px solid var(--border);} .tab{flex:1;text-align:center;padding:8px 4px;cursor:pointer;font-size:12px;color:var(--text-dim);border-bottom:2px solid transparent;} .tab.active{color:var(--text);border-bottom-color:var(--accent);}
+  .tab-body{flex:1;overflow-y:auto;padding:4px 0;}
+  table{width:100%;border-collapse:collapse;font-size:12px;} th,td{text-align:right;padding:5px 12px;border-bottom:1px solid var(--grid);} th:first-child,td:first-child{text-align:left;color:var(--text-dim);} td{font-variant-numeric:tabular-nums;}
+  .stat-group-title{padding:9px 12px 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);font-weight:600;}
+  .pill{font-size:11px;padding:1px 7px;border-radius:10px;} .pill.good{background:rgba(78,201,122,.15);color:var(--good);} .pill.warn{background:rgba(255,180,84,.15);color:var(--accent-2);} .pill.bad{background:rgba(255,107,107,.15);color:var(--bad);}
+  .insight{display:flex;gap:9px;padding:10px 12px;border-bottom:1px solid var(--grid);line-height:1.45;} .insight .ico{font-size:15px;flex-shrink:0;} .insight .txt b{color:#fff;} .insight.warn{background:rgba(255,180,84,.05);} .insight.bad{background:rgba(255,107,107,.06);}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar">
+    <span class="title">Violin Plot <span class="badge">Distribution Shape · Design Mockup</span></span>
+    <span class="spacer"></span><button class="tbtn" id="btnReset">Reset View</button><button class="tbtn">⤓ Export</button>
+  </div>
+  <div class="body">
+    <div class="rail" id="rail">
+      <button data-panel="channels" class="active"><span class="ico">📑</span>Channels</button>
+      <button data-panel="density"><span class="ico">🎻</span>Density</button>
+      <button data-panel="inner"><span class="ico">▣</span>Inner</button>
+      <button data-panel="split"><span class="ico">🪞</span>Split</button>
+      <button data-panel="compare"><span class="ico">⚖️</span>Compare</button>
+    </div>
+    <div class="drawer" id="drawer">
+      <div class="drawer-head"><span id="drawerTitle">Channels</span><span class="x" id="drawerX">✕</span></div>
+      <div class="panel active" data-panel="channels">
+        <div class="grp-title">Value channel — click to plot</div><div id="chanList"></div>
+        <div class="section"><div class="row"><label>Group by</label>
+          <select id="groupBy"><option value="bearing" selected>Bearing</option><option value="mode">Operating mode</option></select></div></div>
+      </div>
+      <div class="panel" data-panel="density">
+        <div class="section">
+          <div class="row"><label>Bandwidth ×</label><input type="range" id="bw" min="30" max="250" value="100"><span class="val" id="bwV">1.0</span></div>
+          <div class="row"><label>Scale</label>
+            <select id="scale"><option value="area" selected>Equal area</option><option value="count">By count</option><option value="width">Equal width</option></select></div>
+          <div class="row"><label>Quantile lines</label><input type="checkbox" id="qlines" checked></div>
+          <div class="hintnote">Violin = mirrored KDE. Bandwidth ↓ reveals multimodality; ↑ smooths it. "By count" sizes violins by n.</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="inner">
+        <div class="section">
+          <div class="row"><label>Inner element</label>
+            <select id="inner"><option value="box" selected>Mini box</option><option value="quartile">Quartile lines</option><option value="points">Stick (rug)</option><option value="none">None</option></select></div>
+          <div class="row"><label>Mean ± SD marker</label><input type="checkbox" id="meanSd" checked></div>
+          <div class="hintnote">The inner box keeps the five-number summary visible inside the density shape.</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="split">
+        <div class="section">
+          <div class="row"><label>Split violin</label><input type="checkbox" id="split"></div>
+          <div class="row"><label>Split by</label>
+            <select id="splitBy"><option value="mode" selected>Operating mode (Idle/Load)</option></select></div>
+          <div class="hintnote">Split violin mirrors two sub-categories on each side — compare distributions with half the ink (Seaborn pattern).</div>
+        </div>
+      </div>
+      <div class="panel" data-panel="compare">
+        <div class="section">
+          <div class="row"><label>Significance brackets</label><input type="checkbox" id="sig" checked></div>
+          <div class="hintnote">Pairwise Mann–Whitney with ★ markers — pairs whose distributions differ.</div>
+        </div>
+      </div>
+    </div>
+    <div class="pane-center"><div class="plot-wrap" id="plotWrap"><canvas id="plot"></canvas><canvas id="overlay"></canvas>
+      <div class="readout" id="readout">Group: — &nbsp; Median: —</div></div></div>
+    <div class="pane-right">
+      <div class="tabs"><div class="tab active" data-tab="stats">Statistics</div><div class="tab" data-tab="insights">Insights</div></div>
+      <div class="tab-body" id="tab-stats"></div><div class="tab-body" id="tab-insights" style="display:none"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* MachinePulseAI — Violin Plot mockup. Synthetic data, no backend.
+   Mirrored KDE per group, bandwidth + scale (area/count/width), inner box/quartiles/rug,
+   mean±SD, split violin (two sub-categories), multimodality detection, pairwise Mann-Whitney. */
+const GROUPS_BEARING=[{key:'A',name:'Bearing A',color:'#4ea1ff'},{key:'B',name:'Bearing B',color:'#ffb454'},{key:'C',name:'Bearing C',color:'#b07cff'}];
+const GROUPS_MODE=[{key:'Idle',name:'Idle',color:'#4ec97a'},{key:'Load',name:'Load',color:'#ffb454'},{key:'Peak',name:'Peak',color:'#ff6b6b'}];
+const CHANNELS=['Vibration RMS','Temperature','Bearing Clearance'];
+function randn(){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+const DATA=[];
+for(const b of ['A','B','C']){const shift={A:0,B:0.6,C:1.4}[b];
+  for(const mode of ['Idle','Load','Peak']){const ms={Idle:0,Load:0.8,Peak:2.2}[mode];const n=110;
+    for(let i=0;i<n;i++){
+      // Bearing C made bimodal on Vibration to showcase multimodality
+      let vib;if(b==='C'&&Math.random()<0.5)vib=2.0+ms+0.8*randn();else vib=4.0+shift+ms+0.9*randn();vib=Math.max(0.1,vib);
+      const temp=55+shift*5+ms*4+3*randn();const clr=(Math.random()<0.5?12+1.1*randn():17+1.3*randn());
+      DATA.push({bearing:b,mode,'Vibration RMS':vib,'Temperature':temp,'Bearing Clearance':clr});}}}
+const ST={col:'Vibration RMS',groupBy:'bearing',bw:1.0,scale:'area',qlines:true,inner:'box',meanSd:true,
+  split:false,splitBy:'mode',sig:true,panel:'channels',drawerOpen:true};
+const $=id=>document.getElementById(id);
+const plot=$('plot'),overlay=$('overlay'),ctx=plot.getContext('2d'),octx=overlay.getContext('2d');
+const wrap=$('plotWrap'),readout=$('readout');
+let PAD={l:60,r:24,t:40,b:48},W=0,H=0,DPR=window.devicePixelRatio||1;
+const getCSS=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const mean=a=>a.reduce((s,v)=>s+v,0)/a.length;
+const std=a=>{const m=mean(a);return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/(a.length-1||1));};
+function q(s,p){const i=(s.length-1)*p,b=Math.floor(i),r=i-b;return s[b+1]!==undefined?s[b]+r*(s[b+1]-s[b]):s[b];}
+function groupDefs(){return ST.groupBy==='bearing'?GROUPS_BEARING:GROUPS_MODE;}
+function groupVals(g,sub){return DATA.filter(d=>d[ST.groupBy]===g.key&&(!sub||d[ST.splitBy]===sub)).map(d=>d[ST.col]);}
+function kde(vals,ys,bwScale){const n=vals.length,sd=std(vals);const s=[...vals].sort((a,b)=>a-b);const iqr=q(s,0.75)-q(s,0.25);
+  const h=0.9*Math.min(sd,iqr/1.34)*Math.pow(n,-1/5)*bwScale||1;
+  return ys.map(y=>{let acc=0;for(const v of vals)acc+=Math.exp(-0.5*((y-v)/h)**2);return acc/(n*h*Math.sqrt(2*Math.PI));});}
+function countPeaks(c){const mx=Math.max(...c);let p=0;for(let i=1;i<c.length-1;i++)if(c[i]>c[i-1]&&c[i]>=c[i+1]&&c[i]>0.15*mx)p++;return p;}
+function mannWhitney(a,b){const all=a.map(v=>[v,0]).concat(b.map(v=>[v,1])).sort((x,y)=>x[0]-y[0]);let r=0;for(let i=0;i<all.length;i++)if(all[i][1]===0)r+=i+1;
+  const n1=a.length,n2=b.length;const U1=r-n1*(n1+1)/2,U=Math.min(U1,n1*n2-U1);const mu=n1*n2/2,sd=Math.sqrt(n1*n2*(n1+n2+1)/12);
+  const z=(U-mu)/sd;return 2*(1-0.5*(1+erf(Math.abs(z)/Math.SQRT2)));}
+function erf(x){const t=1/(1+0.3275911*Math.abs(x));const y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x);return x>=0?y:-y;}
+function resize(){W=wrap.clientWidth;H=wrap.clientHeight;for(const c of [plot,overlay]){c.width=W*DPR;c.height=H*DPR;c.getContext('2d').setTransform(DPR,0,0,DPR,0,0);}draw();}
+let VIEW={y0:0,y1:1};
+function ty(y){return H-PAD.b-(y-VIEW.y0)/(VIEW.y1-VIEW.y0)*(H-PAD.t-PAD.b);}
+function niceTicks(lo,hi,n){const span=hi-lo,s0=span/n,mag=Math.pow(10,Math.floor(Math.log10(s0)));const nm=s0/mag;let st=mag*(nm<1.5?1:nm<3?2:nm<7?5:10);const start=Math.ceil(lo/st)*st,out=[];for(let v=start;v<=hi+1e-9;v+=st)out.push(v);return out;}
+function fmt(v){return Math.abs(v)<1?v.toFixed(2):v.toFixed(Math.abs(v)<100?1:0);}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  const gs=groupDefs();const av=DATA.map(d=>d[ST.col]);const allMin=Math.min(...av),allMax=Math.max(...av);
+  const pad=(allMax-allMin)*0.06||1;VIEW.y0=allMin-pad;VIEW.y1=allMax+pad;
+  ctx.strokeStyle=getCSS('--grid');ctx.fillStyle=getCSS('--text-dim');ctx.font='11px Segoe UI';ctx.textAlign='right';ctx.textBaseline='middle';ctx.lineWidth=1;
+  for(const t of niceTicks(VIEW.y0,VIEW.y1,7)){const Y=ty(t);if(Y<PAD.t-1||Y>H-PAD.b+1)continue;ctx.beginPath();ctx.moveTo(PAD.l,Y);ctx.lineTo(W-PAD.r,Y);ctx.stroke();ctx.fillText(fmt(t),PAD.l-8,Y);}
+  ctx.save();ctx.fillStyle=getCSS('--text');ctx.translate(14,PAD.t+(H-PAD.t-PAD.b)/2);ctx.rotate(-Math.PI/2);ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(ST.col,0,0);ctx.restore();
+  const plotW=W-PAD.l-PAD.r,slot=plotW/gs.length,half=Math.min(70,slot*0.42);
+  const ys=[];for(let i=0;i<=80;i++)ys.push(VIEW.y0+(VIEW.y1-VIEW.y0)*i/80);
+  // global max density for scale=width/area
+  const dens=gs.map(g=>{if(ST.split){return {L:kde(groupVals(g,'Idle'),ys,ST.bw),R:kde(groupVals(g,'Load'),ys,ST.bw)};}return {C:kde(groupVals(g),ys,ST.bw)};});
+  let gMax=0;dens.forEach(d=>Object.values(d).forEach(c=>gMax=Math.max(gMax,...c)));
+  const counts=gs.map(g=>groupVals(g).length);const maxCount=Math.max(...counts);
+  gs.forEach((g,i)=>{const cx=PAD.l+slot*i+slot/2;const d=dens[i];
+    let widthScale=half;if(ST.scale==='count')widthScale=half*(counts[i]/maxCount);
+    const norm=ST.scale==='width'?Math.max(...(d.C||d.L)):gMax;
+    if(ST.split){drawHalf(cx,d.L,ys,-1,g.color,widthScale,norm);drawHalf(cx,d.R,ys,1,'#ffb454',widthScale,norm);}
+    else{drawHalf(cx,d.C,ys,-1,g.color,widthScale,norm);drawHalf(cx,d.C,ys,1,g.color,widthScale,norm);}
+    drawInner(cx,groupVals(g),g.color,half);
+  });
+  // significance
+  if(ST.sig&&!ST.split&&gs.length>=2){let level=0;
+    for(let i=0;i<gs.length-1;i++){const p=mannWhitney(groupVals(gs[i]),groupVals(gs[i+1]));if(p>=0.05)continue;
+      const cx1=PAD.l+slot*i+slot/2,cx2=PAD.l+slot*(i+1)+slot/2,yb=PAD.t+14+level*18;
+      ctx.strokeStyle=getCSS('--text-dim');ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(cx1,yb+5);ctx.lineTo(cx1,yb);ctx.lineTo(cx2,yb);ctx.lineTo(cx2,yb+5);ctx.stroke();
+      ctx.fillStyle=getCSS('--text');ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText(p<0.001?'★★★':p<0.01?'★★':'★',(cx1+cx2)/2,yb-1);level++;}}
+  ctx.fillStyle=getCSS('--text');ctx.font='12px Segoe UI';ctx.textAlign='center';ctx.textBaseline='top';
+  gs.forEach((g,i)=>{ctx.fillStyle=g.color;ctx.fillText(g.name,PAD.l+slot*i+slot/2,H-PAD.b+8);});
+  if(ST.split){ctx.fillStyle=getCSS('--text-dim');ctx.textAlign='left';ctx.fillText('◀ Idle   Load ▶',PAD.l+4,H-PAD.b+26);}
+  ctx.strokeStyle=getCSS('--border');ctx.strokeRect(PAD.l,PAD.t,plotW,H-PAD.t-PAD.b);
+  buildStats(gs);buildInsights(gs,dens,ys);
+}
+function drawHalf(cx,curve,ys,dir,color,widthScale,norm){
+  ctx.beginPath();ctx.moveTo(cx,ty(ys[0]));
+  for(let i=0;i<ys.length;i++){const X=cx+dir*(curve[i]/norm)*widthScale,Y=ty(ys[i]);ctx.lineTo(X,Y);}
+  ctx.lineTo(cx,ty(ys[ys.length-1]));ctx.closePath();
+  ctx.fillStyle=color;ctx.globalAlpha=0.22;ctx.fill();ctx.globalAlpha=0.9;ctx.strokeStyle=color;ctx.lineWidth=1.4;ctx.stroke();ctx.globalAlpha=1;
+}
+function drawInner(cx,vals,color,half){const s=[...vals].sort((a,b)=>a-b);const q1=q(s,0.25),med=q(s,0.5),q3=q(s,0.75);
+  if(ST.inner==='box'){const bw=10;ctx.fillStyle='#1b1e24';ctx.fillRect(cx-bw/2,ty(q3),bw,ty(q1)-ty(q3));
+    ctx.strokeStyle='#cfd6df';ctx.lineWidth=1;ctx.strokeRect(cx-bw/2,ty(q3),bw,ty(q1)-ty(q3));
+    ctx.strokeStyle=color;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(cx,ty(s[0]));ctx.lineTo(cx,ty(q1));ctx.moveTo(cx,ty(q3));ctx.lineTo(cx,ty(s[s.length-1]));ctx.stroke();
+    ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(cx,ty(med),2.5,0,2*Math.PI);ctx.fill();}
+  else if(ST.inner==='quartile'){[q1,med,q3].forEach((v,k)=>{ctx.setLineDash(k===1?[]:[3,3]);ctx.strokeStyle='#cfd6df';ctx.lineWidth=k===1?1.6:1;
+    ctx.beginPath();ctx.moveTo(cx-half*0.3,ty(v));ctx.lineTo(cx+half*0.3,ty(v));ctx.stroke();});ctx.setLineDash([]);}
+  else if(ST.inner==='points'){ctx.strokeStyle='#fff';ctx.globalAlpha=0.3;ctx.lineWidth=1;const step=Math.max(1,Math.floor(vals.length/120));
+    for(let i=0;i<vals.length;i+=step){ctx.beginPath();ctx.moveTo(cx-3,ty(vals[i]));ctx.lineTo(cx+3,ty(vals[i]));ctx.stroke();}ctx.globalAlpha=1;}
+  if(ST.meanSd){const m=mean(vals),sd=std(vals);ctx.strokeStyle='#ffb454';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(cx,ty(m-sd));ctx.lineTo(cx,ty(m+sd));ctx.stroke();
+    ctx.fillStyle='#ffb454';ctx.beginPath();ctx.arc(cx,ty(m),3,0,2*Math.PI);ctx.fill();}
+}
+function buildStats(gs){let html=`<div class="stat-group-title">${ST.col} — by ${ST.groupBy}</div><table><tr><th>Group</th><th>Median</th><th>Modes</th></tr>`;
+  const ys=[];for(let i=0;i<=80;i++)ys.push(VIEW.y0+(VIEW.y1-VIEW.y0)*i/80);
+  gs.forEach(g=>{const v=groupVals(g);const s=[...v].sort((a,b)=>a-b);const peaks=countPeaks(kde(v,ys,ST.bw));
+    html+=`<tr><td style="color:${g.color}">${g.name}</td><td>${q(s,0.5).toFixed(2)}</td><td>${peaks} ${peaks>=2?'<span class="pill warn">multi</span>':''}</td></tr>`;});
+  html+=`</table>`;
+  if(gs.length>=2){html+=`<div class="stat-group-title">Pairwise Mann–Whitney</div><table><tr><th>Pair</th><th>p</th></tr>`;
+    for(let i=0;i<gs.length;i++)for(let j=i+1;j<gs.length;j++){const p=mannWhitney(groupVals(gs[i]),groupVals(gs[j]));
+      html+=`<tr><td>${gs[i].name.replace('Bearing ','')}–${gs[j].name.replace('Bearing ','')}</td><td>${p<0.001?'&lt;0.001':p.toFixed(3)} ${p<0.05?'<span class="pill good">sig</span>':'<span class="pill warn">ns</span>'}</td></tr>`;}
+    html+=`</table>`;}
+  $('tab-stats').innerHTML=html;
+}
+function buildInsights(gs,dens,ys){const out=[];
+  const multi=gs.filter((g,i)=>countPeaks((dens[i].C||dens[i].L))>=2);
+  if(multi.length)out.push({i:'🎻',c:'warn',t:`<b>${multi.map(g=>g.name).join(', ')}</b> ${multi.length>1?'are':'is'} <b>multimodal</b> — the density shows ≥2 peaks. A box plot would hide this entirely; the violin exposes mixed regimes.`});
+  else out.push({i:'🎻',c:'',t:`All groups are unimodal at the current bandwidth.`});
+  out.push({i:'🔎',c:'',t:`Lower the <b>bandwidth</b> to test if a single peak splits into several — bandwidth sensitivity is the key diagnostic a box plot can't give.`});
+  const byMed=gs.map(g=>({g,m:(()=>{const s=[...groupVals(g)].sort((a,b)=>a-b);return q(s,0.5);})()})).sort((a,b)=>b.m-a.m);
+  out.push({i:'🔝',c:'',t:`Highest median: <b>${byMed[0].g.name}</b>; the shape also shows where mass concentrates, not just the center.`});
+  if(ST.split)out.push({i:'🪞',c:'',t:`Split violin compares <b>Idle vs Load</b> within each group using half the ink — asymmetry between sides = the sub-category changes the distribution.`});
+  out.push({i:'💡',c:'',t:`KDE shape + multimodality detection run in the proposed C++ <code>mp_cpp::stats</code> core. Same kernel powers the histogram widget — one implementation.`});
+  $('tab-insights').innerHTML=out.map(o=>`<div class="insight ${o.c}"><span class="ico">${o.i}</span><span class="txt">${o.t}</span></div>`).join('');
+}
+overlay.addEventListener('mousemove',e=>{const rect=overlay.getBoundingClientRect(),mx=e.clientX-rect.left;const gs=groupDefs();const slot=(W-PAD.l-PAD.r)/gs.length;const idx=Math.floor((mx-PAD.l)/slot);
+  if(idx>=0&&idx<gs.length){const s=[...groupVals(gs[idx])].sort((a,b)=>a-b);readout.innerHTML=`Group: <b>${gs[idx].name}</b> &nbsp; Median: <b>${q(s,0.5).toFixed(2)}</b> &nbsp; IQR: <b>${(q(s,0.75)-q(s,0.25)).toFixed(2)}</b>`;}});
+function selectPanel(name){if(ST.drawerOpen&&ST.panel===name){ST.drawerOpen=false;$('drawer').classList.add('collapsed');$('rail').querySelectorAll('button').forEach(b=>b.classList.remove('active'));setTimeout(resize,140);return;}
+  ST.panel=name;ST.drawerOpen=true;$('drawer').classList.remove('collapsed');
+  $('rail').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.panel===name));
+  $('drawer').querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.dataset.panel===name));
+  const titles={channels:'Channels',density:'Density',inner:'Inner',split:'Split',compare:'Compare'};$('drawerTitle').textContent=titles[name];setTimeout(resize,140);}
+$('rail').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>selectPanel(b.dataset.panel)));
+$('drawerX').addEventListener('click',()=>{ST.drawerOpen=false;$('drawer').classList.add('collapsed');$('rail').querySelectorAll('button').forEach(b=>b.classList.remove('active'));setTimeout(resize,140);});
+function buildChannels(){$('chanList').innerHTML=CHANNELS.map(c=>`<div class="chan ${c===ST.col?'sel':''}" data-col="${c}"><span class="swatch"></span><span class="name">${c}</span>${c===ST.col?'<span class="tag">▶ shown</span>':''}</div>`).join('');
+  $('chanList').querySelectorAll('.chan').forEach(el=>el.addEventListener('click',()=>{ST.col=el.dataset.col;buildChannels();draw();}));}
+function bindSel(id,key,after){const el=$(id);el.value=ST[key];el.addEventListener('change',()=>{ST[key]=el.value;after&&after();draw();});}
+bindSel('groupBy','groupBy');bindSel('scale','scale');bindSel('inner','inner');bindSel('splitBy','splitBy');
+$('bw').addEventListener('input',e=>{ST.bw=e.target.value/100;$('bwV').textContent=ST.bw.toFixed(1);draw();});
+for(const [id,key] of [['qlines','qlines'],['meanSd','meanSd'],['split','split'],['sig','sig']])$(id).addEventListener('change',e=>{ST[key]=e.target.checked;draw();});
+$('btnReset').addEventListener('click',draw);
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');for(const n of ['stats','insights'])$('tab-'+n).style.display=(n===t.dataset.tab)?'block':'none';}));
+buildChannels();new ResizeObserver(resize).observe(wrap);resize();
+</script>
+</body>
+</html>
